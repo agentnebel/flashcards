@@ -4,16 +4,21 @@ Anki-ähnliche, offline-fähige Spaced-Repetition-PWA mit **FSRS**-Scheduler.
 Frontend: React + Vite + PWA. Backend: ein einziger Cloudflare Worker mit Static Assets,
 D1 (SQLite) und R2 (Medien). Vollständiger Plan: [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
-## Funktioniert bereits (v0.1)
+## Funktioniert bereits (v0.2)
 
 - Decks anlegen, Karten hinzufügen (Einfach / Einfach+Umkehrung / Lückentext-Cloze)
+- **Screenshot-/Bild-Upload** im Editor: Einfügen per **Paste (⌘V)**, **Datei-Button** oder
+  **Drag & Drop**; Bilder werden komprimiert (≤1600px, WebP/JPEG), lokal als Blob in IndexedDB
+  gespeichert (dedupliziert per SHA-256) und in den Karten gerendert. JSON-Backup enthält die Bilder.
 - **FSRS-Review-Loop** mit Intervallvorschau und Tastatur (Leertaste = aufdecken/Gut, 1–4 = Bewertung)
 - Lokale Persistenz in IndexedDB (Dexie), offline nutzbar, JSON-Backup-Export
 - Karten-Browser mit Suche & Löschen, Ziel-Retention einstellbar
-- Worker-API: `/api/health`, Auth (JWT), Delta-Sync (`/api/sync/pull|push`), Medien (R2)
+- Worker-API: `/api/health`, Auth (JWT), Delta-Sync (`/api/sync/pull|push`),
+  Medien (`/api/media/upload|exists|:hash`, R2)
 
-> Cloud-Sync-Endpunkte sind serverseitig lauffähig; die clientseitige Sync-Schleife
-> (Login-UI + Outbox-Versand) ist der nächste Meilenstein (M2).
+> **Bild-Sync über Geräte** braucht aktiviertes R2 (siehe unten) + die clientseitige Sync-Schleife
+> (M2). Lokal funktioniert der Bild-Upload bereits ohne R2. Die Media-Endpunkte antworten bis zur
+> R2-Aktivierung sauber mit `503 {"error":"R2 storage not enabled"}`.
 
 ## Lokal entwickeln
 

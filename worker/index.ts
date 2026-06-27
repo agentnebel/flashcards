@@ -2,12 +2,14 @@ import { AutoRouter, json } from 'itty-router';
 import type { IRequest } from 'itty-router';
 import { handleLogin, handleRegister, requireAuth } from './auth';
 import { handlePull, handlePush } from './sync';
-import { handleMediaGet, handleMediaUpload } from './media';
+import { handleMediaExists, handleMediaGet, handleMediaUpload } from './media';
 
 export interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  MEDIA: R2Bucket;
+  // R2 ist noch nicht aktiviert -> Binding ist in wrangler.jsonc auskommentiert und
+  // zur Laufzeit undefined. Handler müssen das abfangen (503). Optional getypt.
+  MEDIA?: R2Bucket;
   JWT_SECRET: string;
 }
 
@@ -21,6 +23,7 @@ router
   .post('/sync/pull', requireAuth, handlePull)
   .post('/sync/push', requireAuth, handlePush)
   .post('/media/upload', requireAuth, handleMediaUpload)
+  .post('/media/exists', requireAuth, handleMediaExists)
   .get('/media/:hash', requireAuth, handleMediaGet);
 
 export default {

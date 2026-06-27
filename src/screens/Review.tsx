@@ -10,6 +10,7 @@ import {
   previewDueDates,
 } from '../db/api';
 import { renderCard } from '../lib/cardgen';
+import { resolveMediaHtml } from '../lib/media';
 import { fmtInterval } from '../scheduler/fsrs';
 
 const GRADES: { grade: Grade; label: string; cls: string; key: string }[] = [
@@ -51,7 +52,14 @@ export default function Review() {
       const note = await db.notes.get(current.noteId);
       const nt = await db.noteTypes.get(current.noteTypeId);
       if (!alive || !note || !nt) return;
-      setRendered(renderCard(note, nt, current));
+      const raw = renderCard(note, nt, current);
+      // flashmedia:HASH-Referenzen in Object-URLs der lokalen Blobs auflösen.
+      const [front, back] = await Promise.all([
+        resolveMediaHtml(raw.front),
+        resolveMediaHtml(raw.back),
+      ]);
+      if (!alive) return;
+      setRendered({ front, back });
       setPreviews(previewDueDates(current, retention));
       setRevealed(false);
     })();

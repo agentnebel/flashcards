@@ -11,6 +11,11 @@ const STATE_LABEL: Record<number, string> = {
   [State.Relearning]: 'relearn',
 };
 
+// HTML-Tags (z. B. eingebettete <img>-Bilder) für die Listen-Vorschau entfernen.
+function stripTags(s: string): string {
+  return s.replace(/<[^>]*>/g, '').trim();
+}
+
 export default function Browse() {
   const notes = useLiveQuery(() => db.notes.orderBy('updatedAt').reverse().toArray(), []);
   const cards = useLiveQuery(() => db.cards.toArray(), []);
@@ -36,7 +41,7 @@ export default function Browse() {
             <div key={n.id} className="card-tile">
               <div style={{ minWidth: 0 }}>
                 <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {n.sortField || <span className="muted">(leer)</span>}
+                  {stripTags(n.sortField) || <span className="muted">(leer)</span>}
                 </div>
                 <div className="meta">
                   {noteCards.length} Karte(n) · {states.join(', ')}

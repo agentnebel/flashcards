@@ -159,15 +159,40 @@ export async function setSuspended(cardId: string, suspended: 0 | 1): Promise<vo
   await db.outbox.add({ op: 'upsert', entity: 'card', entityId: cardId, payload: updated, createdAt: Date.now() });
 }
 
+// Blob → base64 data URL (für vollständige, eigenständige Backups).
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error('FileReader-Fehler'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export async function exportBackup(): Promise<string> {
-  const [decks, noteTypes, notes, cards, revlog] = await Promise.all([
+  const [decks, noteTypes, notes, cards, revlog, mediaRows] = await Promise.all([
     db.decks.toArray(),
     db.noteTypes.toArray(),
     db.notes.toArray(),
     db.cards.toArray(),
     db.revlog.toArray(),
+    db.media.toArray(),
   ]);
-  return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), decks, noteTypes, notes, cards, revlog }, null, 2);
+  // Medien als base64-Data-URLs einbetten, damit das Backup vollständig ist.
+  const media = await Promise.all(
+    mediaRows.map(async (m) => ({
+      hash: m.hash,
+      mime: m.mime,
+      width: m.width,
+      height: m.height,
+      dataUrl: await blobToDataUrl(m.blob),
+    })),
+  );
+  return JSON.stringify(
+    { version: 1, exportedAt: new Date().toISOString(), decks, noteTypes, notes, cards, revlog, media },
+    null,
+    2,
+  );
 }
 
 export type { NoteType };

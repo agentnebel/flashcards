@@ -86,6 +86,18 @@ export interface Meta {
   value: unknown;
 }
 
+export interface Media {
+  hash: string; // sha256-hex der komprimierten Bytes (Primärschlüssel, dedupliziert)
+  blob: Blob;
+  mime: string;
+  size: number;
+  width: number;
+  height: number;
+  createdAt: number;
+  usn: number; // -1 = lokal geändert
+  synced: 0 | 1; // 1 = bereits auf R2 hochgeladen
+}
+
 // ---- Dexie-Datenbank ----
 
 class FlashcardsDB extends Dexie {
@@ -96,6 +108,7 @@ class FlashcardsDB extends Dexie {
   revlog!: EntityTable<RevlogEntry, 'id'>;
   outbox!: EntityTable<OutboxItem, 'id'>;
   meta!: EntityTable<Meta, 'key'>;
+  media!: EntityTable<Media, 'hash'>;
 
   constructor() {
     super('flashcards');
@@ -107,6 +120,17 @@ class FlashcardsDB extends Dexie {
       revlog: 'id, cardId, reviewedAt',
       outbox: '++id, entity, createdAt',
       meta: 'key',
+    });
+    // v2: Medien-Tabelle für Bild-Uploads (lokal als Blob, Dedup via Hash).
+    this.version(2).stores({
+      decks: 'id, parentId, updatedAt',
+      noteTypes: 'id, updatedAt',
+      notes: 'id, deckId, noteTypeId, updatedAt',
+      cards: 'id, noteId, deckId, due, suspended, updatedAt',
+      revlog: 'id, cardId, reviewedAt',
+      outbox: '++id, entity, createdAt',
+      meta: 'key',
+      media: 'hash, createdAt, synced',
     });
   }
 }
