@@ -14,22 +14,20 @@
     "not_found_handling": "single-page-application"
   },
 
-  // D1: anlegen mit `wrangler d1 create flashcards-db`, dann database_id hier eintragen.
+  // D1: angelegt mit `wrangler d1 create flashcards-db`.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "flashcards-db",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
-    }
-  ],
-
-  // R2 für Medien: `wrangler r2 bucket create flashcards-media`.
-  "r2_buckets": [
-    {
-      "binding": "MEDIA",
-      "bucket_name": "flashcards-media"
+      "database_id": "45ddbb44-7cbe-4b31-98a8-4f1ffaa019af"
     }
   ]
+
+  // R2 für Medien (M3): erst im Cloudflare-Dashboard R2 aktivieren, dann
+  // `wrangler r2 bucket create flashcards-media` und folgenden Block einkommentieren:
+  // "r2_buckets": [
+  //   { "binding": "MEDIA", "bucket_name": "flashcards-media" }
+  // ]
 
   // Secret: `wrangler secret put JWT_SECRET`
 }
