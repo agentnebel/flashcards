@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/db/api.ts","./src/db/db.ts","./src/db/ids.ts","./src/db/seed.ts","./src/lib/cardgen.ts","./src/scheduler/fsrs.ts","./src/screens/addcard.tsx","./src/screens/browse.tsx","./src/screens/decklist.tsx","./src/screens/review.tsx","./src/screens/settings.tsx"],"version":"5.9.3"}
