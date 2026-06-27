@@ -170,6 +170,16 @@ label { display: block; font-size: 0.85rem; color: var(--muted); margin: 0.9rem 
 .answers .good { border-color: var(--good); }
 .answers .easy { border-color: var(--easy); }
 
+.preview-table { border-collapse: collapse; font-size: 0.8rem; }
+.preview-table td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .row { display: flex; gap: 0.5rem; align-items: center; }
 .muted { color: var(--muted); }
 .center { text-align: center; }

@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Link } from 'react-router-dom';
 import { exportBackup, getDesiredRetention, setDesiredRetention } from '../db/api';
 import { db } from '../db/db';
 import {
@@ -73,7 +74,10 @@ export default function Settings() {
 
       <section>
         <h3>Daten</h3>
-        <button onClick={onExport}>JSON-Backup exportieren</button>
+        <div className="row">
+          <button onClick={onExport}>JSON-Backup exportieren</button>
+          <Link to="/import" className="btn">Importieren (CSV/.apkg)</Link>
+        </div>
         <p className="muted" style={{ fontSize: '0.8rem' }}>
           Ausstehende, noch nicht gesyncte Änderungen: {outboxCount}
         </p>

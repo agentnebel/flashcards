@@ -86,6 +86,71 @@ export async function deleteNote(noteId: string): Promise<void> {
   });
 }
 
+// Massenimport (CSV/TSV): erzeugt Notizen + Karten + Outbox-Einträge in Batches.
+export async function importNotes(params: {
+  deckId: string;
+  noteTypeId: string;
+  rows: string[][];
+  fieldMap: number[]; // Spaltenindex je Notiztyp-Feld, -1 = leer lassen
+  hasHeader: boolean;
+}): Promise<number> {
+  const nt = await db.noteTypes.get(params.noteTypeId);
+  if (!nt) throw new Error('Notiztyp nicht gefunden');
+  const dataRows = params.hasHeader ? params.rows.slice(1) : params.rows;
+  let imported = 0;
+  const CHUNK = 200;
+  for (let start = 0; start < dataRows.length; start += CHUNK) {
+    const slice = dataRows.slice(start, start + CHUNK);
+    await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+      const now = Date.now();
+      for (const r of slice) {
+        const fields: Record<string, string> = {};
+        nt.fields.forEach((f, idx) => {
+          const col = params.fieldMap[idx];
+          fields[f] = col >= 0 ? (r[col] ?? '').trim() : '';
+        });
+        if (!Object.values(fields).some((v) => v.trim())) continue;
+        const id = uuid();
+        const note: Note = {
+          id,
+          guid: uuid(),
+          noteTypeId: nt.id,
+          deckId: params.deckId,
+          fields,
+          tags: [],
+          sortField: fields[nt.fields[0]] ?? '',
+          updatedAt: now,
+          usn: -1,
+        };
+        const cards: Card[] = generateCards(note, nt).map((s) => {
+          const fsrs = createEmptyCard(new Date());
+          return {
+            id: uuid(),
+            noteId: id,
+            deckId: params.deckId,
+            noteTypeId: nt.id,
+            templateOrd: s.templateOrd,
+            clozeNum: s.clozeNum,
+            fsrs,
+            due: fsrs.due,
+            suspended: 0,
+            updatedAt: now,
+            usn: -1,
+          };
+        });
+        await db.notes.add(note);
+        await db.cards.bulkAdd(cards);
+        await db.outbox.add({ op: 'upsert', entity: 'note', entityId: id, payload: note, createdAt: now });
+        for (const c of cards) {
+          await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
+        }
+        imported++;
+      }
+    });
+  }
+  return imported;
+}
+
 // Lernschlange: fällige Lern-/Review-Karten zuerst, dann limitierte neue Karten.
 export async function getStudyQueue(deckId: string, newLimit = 20): Promise<Card[]> {
   const now = new Date();

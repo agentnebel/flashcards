@@ -5,6 +5,7 @@ import Review from './screens/Review';
 import AddCard from './screens/AddCard';
 import Browse from './screens/Browse';
 import Settings from './screens/Settings';
+import Import from './screens/Import';
 import { getAuth, getSyncState, loadLastSyncAt, subscribeSync, sync } from './sync/engine';
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="/add" element={<AddCard />} />
           <Route path="/browse" element={<Browse />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/import" element={<Import />} />
         </Routes>
       </main>
 
