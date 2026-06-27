@@ -1,15 +1,35 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { exportBackup, getDesiredRetention, setDesiredRetention } from '../db/api';
 import { db } from '../db/db';
+import {
+  getSyncState,
+  loadLastSyncAt,
+  login,
+  logout,
+  register,
+  subscribeSync,
+  sync,
+  type Auth,
+} from '../sync/engine';
+
+function useSync() {
+  return useSyncExternalStore(subscribeSync, getSyncState);
+}
+
+function fmtTime(ts: number | null): string {
+  if (!ts) return 'nie';
+  return new Date(ts).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+}
 
 export default function Settings() {
   const [retention, setRetention] = useState(0.9);
-  const [health, setHealth] = useState<string>('—');
-  const [outboxCount, setOutboxCount] = useState(0);
+  const auth = useLiveQuery(() => db.meta.get('auth'), [])?.value as Auth | undefined;
+  const outboxCount = useLiveQuery(() => db.outbox.count(), []) ?? 0;
 
   useEffect(() => {
     getDesiredRetention().then(setRetention);
-    db.outbox.count().then(setOutboxCount);
+    loadLastSyncAt();
   }, []);
 
   async function onRetention(v: number) {
@@ -28,19 +48,13 @@ export default function Settings() {
     URL.revokeObjectURL(url);
   }
 
-  async function checkServer() {
-    setHealth('prüfe…');
-    try {
-      const res = await fetch('/api/health');
-      const data = await res.json();
-      setHealth(res.ok ? `OK (${JSON.stringify(data)})` : `Fehler ${res.status}`);
-    } catch {
-      setHealth('nicht erreichbar (lokal ohne Worker normal)');
-    }
-  }
-
   return (
     <div className="stack">
+      <section>
+        <h3>Konto &amp; Sync</h3>
+        {auth ? <Account email={auth.email} outbox={outboxCount} /> : <AuthForm />}
+      </section>
+
       <section>
         <h3>FSRS</h3>
         <label>Ziel-Retention: {Math.round(retention * 100)} %</label>
@@ -61,15 +75,90 @@ export default function Settings() {
         <h3>Daten</h3>
         <button onClick={onExport}>JSON-Backup exportieren</button>
         <p className="muted" style={{ fontSize: '0.8rem' }}>
-          Ausstehende Sync-Änderungen (Outbox): {outboxCount}
+          Ausstehende, noch nicht gesyncte Änderungen: {outboxCount}
         </p>
       </section>
+    </div>
+  );
+}
 
-      <section>
-        <h3>Konto &amp; Sync <span className="muted" style={{ fontSize: '0.75rem' }}>(Phase 2)</span></h3>
-        <button onClick={checkServer}>Server prüfen</button>
-        <p className="muted" style={{ fontSize: '0.8rem' }}>Status: {health}</p>
-      </section>
+function Account({ email, outbox }: { email: string; outbox: number }) {
+  const syncState = useSync();
+  return (
+    <div className="stack">
+      <p className="muted" style={{ fontSize: '0.85rem' }}>
+        Angemeldet als <strong style={{ color: 'var(--text)' }}>{email}</strong>
+      </p>
+      <div className="row">
+        <button className="primary" disabled={syncState.syncing} onClick={() => void sync()}>
+          {syncState.syncing ? 'Synchronisiere…' : 'Jetzt synchronisieren'}
+        </button>
+        <button onClick={() => void logout()}>Abmelden</button>
+      </div>
+      <p className="muted" style={{ fontSize: '0.8rem' }}>
+        Letzter Sync: {fmtTime(syncState.lastSyncAt)} · offen: {outbox}
+      </p>
+      {syncState.error && (
+        <p style={{ fontSize: '0.8rem', color: 'var(--again)' }}>{syncState.error}</p>
+      )}
+    </div>
+  );
+}
+
+function AuthForm() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(action: 'login' | 'register') {
+    setBusy(true);
+    setError(null);
+    try {
+      if (action === 'register') await register(email.trim(), password);
+      else await login(email.trim(), password);
+      void sync();
+    } catch (e) {
+      setError((e as Error).message || 'Fehlgeschlagen');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const valid = email.includes('@') && password.length >= 8;
+
+  return (
+    <div className="stack">
+      <p className="muted" style={{ fontSize: '0.8rem' }}>
+        Anmelden für geräteübergreifenden Sync. Lokale Karten bleiben erhalten und werden hochgeladen.
+      </p>
+      <div>
+        <label>E-Mail</label>
+        <input
+          type="email"
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </div>
+      <div>
+        <label>Passwort (min. 8 Zeichen)</label>
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </div>
+      <div className="row">
+        <button className="primary" disabled={!valid || busy} onClick={() => run('login')}>
+          {busy ? '…' : 'Anmelden'}
+        </button>
+        <button disabled={!valid || busy} onClick={() => run('register')}>
+          Registrieren
+        </button>
+      </div>
+      {error && <p style={{ fontSize: '0.8rem', color: 'var(--again)' }}>{error}</p>}
     </div>
   );
 }

@@ -4,21 +4,25 @@ Anki-ähnliche, offline-fähige Spaced-Repetition-PWA mit **FSRS**-Scheduler.
 Frontend: React + Vite + PWA. Backend: ein einziger Cloudflare Worker mit Static Assets,
 D1 (SQLite) und R2 (Medien). Vollständiger Plan: [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
-## Funktioniert bereits (v0.2)
+## Funktioniert bereits (v0.3)
 
 - Decks anlegen, Karten hinzufügen (Einfach / Einfach+Umkehrung / Lückentext-Cloze)
 - **Screenshot-/Bild-Upload** im Editor: Einfügen per **Paste (⌘V)**, **Datei-Button** oder
   **Drag & Drop**; Bilder werden komprimiert (≤1600px, WebP/JPEG), lokal als Blob in IndexedDB
   gespeichert (dedupliziert per SHA-256) und in den Karten gerendert. JSON-Backup enthält die Bilder.
+- **Geräteübergreifender Sync (M2):** Registrieren/Anmelden in den Einstellungen, danach
+  **Delta-Sync** (push/pull über `change_log`-Cursor). Konflikte: Last-Write-Wins per `updatedAt`,
+  Reviews append-only. Auto-Sync bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch
+  (60 s) sowie manuell per Button.
 - **FSRS-Review-Loop** mit Intervallvorschau und Tastatur (Leertaste = aufdecken/Gut, 1–4 = Bewertung)
 - Lokale Persistenz in IndexedDB (Dexie), offline nutzbar, JSON-Backup-Export
 - Karten-Browser mit Suche & Löschen, Ziel-Retention einstellbar
 - Worker-API: `/api/health`, Auth (JWT), Delta-Sync (`/api/sync/pull|push`),
   Medien (`/api/media/upload|exists|:hash`, R2)
 
-> **Bild-Sync über Geräte** braucht aktiviertes R2 (siehe unten) + die clientseitige Sync-Schleife
-> (M2). Lokal funktioniert der Bild-Upload bereits ohne R2. Die Media-Endpunkte antworten bis zur
-> R2-Aktivierung sauber mit `503 {"error":"R2 storage not enabled"}`.
+> **Bild-Sync über Geräte** braucht zusätzlich aktiviertes R2 (siehe unten). Karten/Reviews
+> synchronisieren bereits; Bild-Blobs werden hochgeladen, sobald R2 aktiv ist. Die Media-Endpunkte
+> antworten bis dahin sauber mit `503 {"error":"R2 storage not enabled"}`.
 
 ## Lokal entwickeln
 
@@ -27,12 +31,13 @@ npm install
 npm run dev          # Vite-Frontend auf http://localhost:5173 (rein lokal, kein Worker nötig)
 ```
 
-Mit Worker/Sync lokal:
+Mit Worker/Sync lokal (Auth + Delta-Sync testen):
 
 ```bash
-npm run db:schema:local   # D1-Schema in die lokale DB
-npm run build
-npm run preview           # wrangler dev: Frontend + /api/* zusammen auf http://localhost:8787
+echo 'JWT_SECRET=local-dev-secret' > .dev.vars   # nur lokal; wird nicht committet
+npm run db:schema:local                          # D1-Schema in die lokale DB
+npx wrangler dev --port 8787                      # lokaler Worker + D1 auf :8787
+npm run dev                                       # Vite auf :5173, proxyt /api → :8787
 ```
 
 ## Cloudflare-Setup (einmalig, Free-Tier)
