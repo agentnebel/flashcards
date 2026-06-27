@@ -8,8 +8,89 @@ import { parseCsv } from '../lib/csv';
 export default function Import() {
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const noteTypes = useLiveQuery(() => db.noteTypes.toArray(), []);
-
   const [deckId, setDeckId] = useState('');
+
+  useEffect(() => {
+    if (decks?.length && !deckId) setDeckId(decks[0].id);
+  }, [decks, deckId]);
+
+  if (!decks || !noteTypes) return <p className="muted">Lädt…</p>;
+
+  return (
+    <div className="stack">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>Importieren</h3>
+        <Link to="/settings" className="muted">‹ Einstellungen</Link>
+      </div>
+
+      <div>
+        <label>Ziel-Deck</label>
+        <select value={deckId} onChange={(e) => setDeckId(e.target.value)}>
+          {decks.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <ApkgSection deckId={deckId} />
+      <hr style={{ border: 'none', borderTop: '1px solid var(--border)', width: '100%' }} />
+      <CsvSection deckId={deckId} noteTypes={noteTypes} />
+    </div>
+  );
+}
+
+function ApkgSection({ deckId }: { deckId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !deckId) return;
+    setBusy(true);
+    setResult(null);
+    setWarnings([]);
+    try {
+      const { importApkg } = await import('../lib/apkg');
+      const r = await importApkg(file, deckId);
+      setResult(`${r.notes} Notizen, ${r.cards} Karten, ${r.noteTypes} Notiztypen, ${r.media} Medien importiert.`);
+      setWarnings(r.warnings);
+    } catch (err) {
+      setResult('Fehler: ' + ((err as Error).message || 'Import fehlgeschlagen'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <h3 style={{ fontSize: '1rem' }}>Anki-Deck (.apkg)</h3>
+      <p className="muted" style={{ fontSize: '0.8rem' }}>
+        Importiert Notizen, Notiztypen und Bilder. Karten starten als „neu". Tipp: ältere
+        .apkg-Exporte (ohne „.anki21b") funktionieren am besten.
+      </p>
+      <input type="file" accept=".apkg,.colpkg" disabled={busy} onChange={onFile} />
+      {busy && <p className="muted" style={{ fontSize: '0.85rem' }}>Importiere… (kann bei großen Decks dauern)</p>}
+      {result && (
+        <p style={{ fontSize: '0.9rem', color: result.startsWith('Fehler') ? 'var(--again)' : 'var(--good)' }}>
+          {result}
+        </p>
+      )}
+      {warnings.map((w, i) => (
+        <p key={i} className="muted" style={{ fontSize: '0.78rem', color: 'var(--hard)' }}>⚠ {w}</p>
+      ))}
+    </section>
+  );
+}
+
+function CsvSection({
+  deckId,
+  noteTypes,
+}: {
+  deckId: string;
+  noteTypes: { id: string; name: string; fields: string[] }[];
+}) {
   const [noteTypeId, setNoteTypeId] = useState('');
   const [text, setText] = useState('');
   const [hasHeader, setHasHeader] = useState(true);
@@ -18,25 +99,19 @@ export default function Import() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (decks?.length && !deckId) setDeckId(decks[0].id);
-  }, [decks, deckId]);
-  useEffect(() => {
-    if (noteTypes?.length && !noteTypeId) setNoteTypeId(noteTypes[0].id);
+    if (noteTypes.length && !noteTypeId) setNoteTypeId(noteTypes[0].id);
   }, [noteTypes, noteTypeId]);
 
-  const nt = useMemo(() => noteTypes?.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
+  const nt = useMemo(() => noteTypes.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
   const parsed = useMemo(() => (text.trim() ? parseCsv(text) : null), [text]);
   const colCount = useMemo(
     () => (parsed ? parsed.rows.reduce((m, r) => Math.max(m, r.length), 0) : 0),
     [parsed],
   );
 
-  // Standard-Mapping: Feld i → Spalte i.
   useEffect(() => {
     if (nt) setFieldMap(nt.fields.map((_, i) => (i < colCount ? i : -1)));
   }, [nt, colCount]);
-
-  if (!decks || !noteTypes) return <p className="muted">Lädt…</p>;
 
   const headerRow = parsed && hasHeader ? parsed.rows[0] : null;
   const previewRows = parsed ? parsed.rows.slice(hasHeader ? 1 : 0, hasHeader ? 4 : 3) : [];
@@ -67,12 +142,8 @@ export default function Import() {
   }
 
   return (
-    <div className="stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h3 style={{ margin: 0 }}>CSV / TSV importieren</h3>
-        <Link to="/settings" className="muted">‹ Einstellungen</Link>
-      </div>
-
+    <section>
+      <h3 style={{ fontSize: '1rem' }}>CSV / TSV</h3>
       <div>
         <label>Datei</label>
         <input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" onChange={onFile} />
@@ -91,9 +162,8 @@ export default function Import() {
       {parsed && (
         <>
           <p className="muted" style={{ fontSize: '0.8rem' }}>
-            Erkannt: Trennzeichen{' '}
-            <code>{parsed.delimiter === '\t' ? 'Tab' : parsed.delimiter}</code> · {colCount} Spalten ·{' '}
-            {dataCount} Datenzeile(n)
+            Erkannt: Trennzeichen <code>{parsed.delimiter === '\t' ? 'Tab' : parsed.delimiter}</code> ·{' '}
+            {colCount} Spalten · {dataCount} Datenzeile(n)
           </p>
 
           <label className="row" style={{ gap: '0.5rem' }}>
@@ -106,14 +176,6 @@ export default function Import() {
             Erste Zeile ist Kopfzeile
           </label>
 
-          <div>
-            <label>Deck</label>
-            <select value={deckId} onChange={(e) => setDeckId(e.target.value)}>
-              {decks.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </div>
           <div>
             <label>Notiztyp</label>
             <select value={noteTypeId} onChange={(e) => setNoteTypeId(e.target.value)}>
@@ -171,6 +233,6 @@ export default function Import() {
           {result}
         </p>
       )}
-    </div>
+    </section>
   );
 }

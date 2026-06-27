@@ -4,9 +4,12 @@ Anki-ähnliche, offline-fähige Spaced-Repetition-PWA mit **FSRS**-Scheduler.
 Frontend: React + Vite + PWA. Backend: ein einziger Cloudflare Worker mit Static Assets,
 D1 (SQLite) und R2 (Medien). Vollständiger Plan: [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
-## Funktioniert bereits (v0.3)
+## Funktioniert bereits (v0.4)
 
 - Decks anlegen, Karten hinzufügen (Einfach / Einfach+Umkehrung / Lückentext-Cloze)
+- **Import (M4):** CSV/TSV (Trennzeichen-Erkennung, Spalten→Feld-Mapping, Vorschau) und
+  **Anki `.apkg`** (altes Format): Notiztypen, Notizen und Bilder werden übernommen, Bild-Verweise
+  auf den lokalen Speicher umgeschrieben. Erreichbar über Einstellungen → „Importieren".
 - **Screenshot-/Bild-Upload** im Editor: Einfügen per **Paste (⌘V)**, **Datei-Button** oder
   **Drag & Drop**; Bilder werden komprimiert (≤1600px, WebP/JPEG), lokal als Blob in IndexedDB
   gespeichert (dedupliziert per SHA-256) und in den Karten gerendert. JSON-Backup enthält die Bilder.
