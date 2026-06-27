@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare
+name: CI / Deploy to Cloudflare
 
 on:
   push:
@@ -6,8 +6,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    # Secret auf Job-Ebene in eine env-Variable spiegeln, damit der Deploy-Schritt
+    # per `if` prüfen kann, ob ein Token hinterlegt ist.
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +23,16 @@ jobs:
 
       - run: npm ci
 
+      # Build validiert bei jedem Push (CI bleibt grün, auch ohne Cloudflare-Token).
       - run: npm run build
 
-      # Benötigt Repo-Secrets CLOUDFLARE_API_TOKEN und CLOUDFLARE_ACCOUNT_ID
-      # sowie ausgefüllte database_id in wrangler.jsonc.
+      # Auto-Deploy NUR, wenn ein Cloudflare-API-Token als Repo-Secret existiert.
+      # Ohne Token wird der Schritt übersprungen statt fehlzuschlagen.
+      # Secrets setzen: Repo → Settings → Secrets and variables → Actions
+      #   CLOUDFLARE_API_TOKEN  (Workers/D1/R2-Schreibrechte)
+      #   CLOUDFLARE_ACCOUNT_ID (160ce2ed549950c2f2bf191ab93b3e45)
       - name: Deploy Worker + Assets
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
