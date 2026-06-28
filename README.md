@@ -1,57 +1,104 @@
 # Flashcards
 
-Anki-ähnliche, offline-fähige Spaced-Repetition-PWA mit **FSRS**-Scheduler.
-Frontend: React + Vite + PWA. Backend: ein einziger Cloudflare Worker mit Static Assets,
-D1 (SQLite) und R2 (Medien). Vollständiger Plan: [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
+Eine Lernkarten-App fürs Handy und den Browser. Karten anlegen, lernen, von überall synchronisieren — kein Account bei einem Drittanbieter nötig, keine Werbung, kein Abo.
 
-## Funktioniert bereits (v0.4)
+**Live:** [flashcards.forsven.workers.dev](https://flashcards.forsven.workers.dev)
 
-- Decks anlegen, Karten hinzufügen (Einfach / Einfach+Umkehrung / Lückentext-Cloze)
-- **Import (M4):** CSV/TSV (Trennzeichen-Erkennung, Spalten→Feld-Mapping, Vorschau) und
-  **Anki `.apkg`** (altes Format): Notiztypen, Notizen und Bilder werden übernommen, Bild-Verweise
-  auf den lokalen Speicher umgeschrieben. Erreichbar über Einstellungen → „Importieren".
-- **Screenshot-/Bild-Upload** im Editor: Einfügen per **Paste (⌘V)**, **Datei-Button** oder
-  **Drag & Drop**; Bilder werden komprimiert (≤1600px, WebP/JPEG), lokal als Blob in IndexedDB
-  gespeichert (dedupliziert per SHA-256) und in den Karten gerendert. JSON-Backup enthält die Bilder.
-- **Geräteübergreifender Sync (M2):** Registrieren/Anmelden in den Einstellungen, danach
-  **Delta-Sync** (push/pull über `change_log`-Cursor). Konflikte: Last-Write-Wins per `updatedAt`,
-  Reviews append-only. Auto-Sync bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch
-  (60 s) sowie manuell per Button.
-- **FSRS-Review-Loop** mit Intervallvorschau und Tastatur (Leertaste = aufdecken/Gut, 1–4 = Bewertung)
-- Lokale Persistenz in IndexedDB (Dexie), offline nutzbar, JSON-Backup-Export
-- Karten-Browser mit Suche & Löschen, Ziel-Retention einstellbar
-- Worker-API: `/api/health`, Auth (JWT), Delta-Sync (`/api/sync/pull|push`),
-  Medien (`/api/media/upload|exists|:hash`, R2)
+---
 
-> **Bild-Sync über Geräte** braucht zusätzlich aktiviertes R2 (siehe unten). Karten/Reviews
-> synchronisieren bereits; Bild-Blobs werden hochgeladen, sobald R2 aktiv ist. Die Media-Endpunkte
-> antworten bis dahin sauber mit `503 {"error":"R2 storage not enabled"}`.
+## Screenshots
 
-## Lokal entwickeln
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-decks.png" width="200" alt="Decks-Übersicht"/><br/><sub>Decks-Übersicht</sub></td>
+    <td align="center"><img src="docs/screenshots/02-review-question.png" width="200" alt="Lernmodus — Frage"/><br/><sub>Lernmodus</sub></td>
+    <td align="center"><img src="docs/screenshots/03-review-answer.png" width="200" alt="Lernmodus — Antwort"/><br/><sub>Antwort bewerten</sub></td>
+    <td align="center"><img src="docs/screenshots/04-add-card.png" width="200" alt="Neue Karte"/><br/><sub>Karte erstellen</sub></td>
+    <td align="center"><img src="docs/screenshots/05-browse.png" width="200" alt="Karten-Liste"/><br/><sub>Karten-Liste</sub></td>
+  </tr>
+</table>
+
+---
+
+## Was die App kann
+
+**Lernen**
+- Karten werden nach einem intelligenten Intervall-Algorithmus (FSRS) wiederholt — wer eine Karte gut kennt, sieht sie seltener. Das spart Zeit.
+- Karte antippen oder Leertaste drücken → Antwort aufdecken. Dann bewerten: Nochmal / Schwer / Gut / Einfach.
+- Swipe nach rechts = Gut, nach links = Nochmal (auf dem Handy).
+- Auf dem Desktop funktionieren die Tasten 1–4 für die Bewertung.
+- Oben rechts läuft ein kleiner Fortschrittsring mit, wie viele Karten in der Sitzung schon erledigt sind.
+
+**Übersicht**
+- Die Decks-Seite zeigt direkt: wie viele Karten heute fällig sind und wie viele Tage am Stück schon gelernt wurde (Streak).
+- Jedes Deck zeigt farbige Zähler — grün für fällige Reviews, blau für neue Karten.
+
+**Karten erstellen**
+- Drei Kartentypen: einfach Vorder-/Rückseite, Vorder-/Rückseite mit automatischer Umkehrung und Lückentext.
+- Bilder lassen sich per Einfügen (⌘V / Strg+V), Datei-Button oder Drag & Drop hinzufügen. Die App komprimiert sie automatisch.
+
+**Karten verwalten**
+- In der Karten-Liste lassen sich Karten bearbeiten und löschen.
+- Decks umbenennen oder löschen: oben rechts „Bearbeiten" tippen, dann erscheint pro Deck ein roter Minus-Button.
+
+**Import**
+- CSV und TSV-Dateien lassen sich direkt importieren — mit Spalten-Vorschau und frei wählbarem Feld-Mapping.
+- Ältere `.apkg`-Dateien (Karteikarten-Export im verbreiteten Format) werden ebenfalls eingelesen.
+
+**Sync**
+- In den Einstellungen einmal registrieren und anmelden.
+- Danach werden Karten und Reviews automatisch über alle Geräte synchronisiert — beim Start, beim Öffnen, beim Online-Gehen und alle 60 Sekunden.
+- Bilder werden über Cloudflare R2 synchronisiert, wenn R2 aktiviert ist.
+
+**Datensicherung**
+- Über Einstellungen → Backup lässt sich alles als JSON-Datei exportieren, Bilder inklusive.
+
+---
+
+## Technischer Stack
+
+| Bereich | Technologie |
+|---|---|
+| Frontend | React, Vite, PWA |
+| Lernalgorithmus | FSRS (`ts-fsrs`) |
+| Lokale Datenbank | Dexie (IndexedDB) |
+| Backend | Cloudflare Worker |
+| Datenbank (Server) | Cloudflare D1 (SQLite) |
+| Medien-Speicher | Cloudflare R2 |
+| Deployment | GitHub Actions → Cloudflare |
+
+Die App läuft komplett offline — der Worker wird nur für den Sync gebraucht.
+
+---
+
+## Lokal starten
 
 ```bash
 npm install
-npm run dev          # Vite-Frontend auf http://localhost:5173 (rein lokal, kein Worker nötig)
+npm run dev   # startet auf http://localhost:5173
 ```
 
-Mit Worker/Sync lokal (Auth + Delta-Sync testen):
+Sync lokal testen (Worker + D1):
 
 ```bash
-echo 'JWT_SECRET=local-dev-secret' > .dev.vars   # nur lokal; wird nicht committet
-npm run db:schema:local                          # D1-Schema in die lokale DB
-npx wrangler dev --port 8787                      # lokaler Worker + D1 auf :8787
-npm run dev                                       # Vite auf :5173, proxyt /api → :8787
+echo 'JWT_SECRET=dev-secret' > .dev.vars
+npm run db:schema:local
+npx wrangler dev --port 8787
+# in einem zweiten Terminal:
+npm run dev
 ```
 
-## Cloudflare-Setup (einmalig, Free-Tier)
+---
+
+## Cloudflare einrichten (einmalig)
 
 ```bash
 npx wrangler login
 
-# D1 anlegen und die ausgegebene database_id in wrangler.jsonc eintragen:
+# Datenbank anlegen — database_id in wrangler.jsonc eintragen:
 npx wrangler d1 create flashcards-db
 
-# R2-Bucket anlegen:
+# Medien-Bucket:
 npx wrangler r2 bucket create flashcards-media
 
 # JWT-Secret setzen:
@@ -60,28 +107,28 @@ npx wrangler secret put JWT_SECRET
 # Schema in die Remote-DB:
 npm run db:schema:remote
 
-# Deploy:
+# Deployen:
 npm run deploy
 ```
 
-## Automatisches Deployment (GitHub)
+---
 
-**Option A – Cloudflare-Git-Integration (empfohlen):** im Cloudflare-Dashboard
-*Workers & Pages → Create → Connect to Git* das Repo `agentnebel/flashcards` verbinden.
-Build-Command `npm run build`, Deploy übernimmt Cloudflare bei jedem Push auf `main`.
+## Automatisches Deployment
 
-**Option B – GitHub Actions:** `.github/workflows/deploy.yml` ist vorbereitet. Repo-Secrets
-`CLOUDFLARE_API_TOKEN` und `CLOUDFLARE_ACCOUNT_ID` setzen; Deploy läuft bei Push auf `main`.
+Der Workflow in `.github/workflows/deploy.yml` deployt automatisch bei jedem Push auf `main`.
 
-> Beide Optionen brauchen die ausgefüllte `database_id` in `wrangler.jsonc` und das gesetzte
-> `JWT_SECRET`.
+Dafür zwei Secrets im GitHub-Repo setzen:
+- `CLOUDFLARE_API_TOKEN` (Workers-Token aus dem Cloudflare-Dashboard)
+- `CLOUDFLARE_ACCOUNT_ID`
+
+---
 
 ## Kosten
 
-Im kleinen Rahmen 0 €: Worker Free (100k Req/Tag), D1 Free, R2 ohne Egress-Gebühren.
+Im normalen Rahmen entstehen keine Kosten: Worker Free (100k Anfragen/Tag), D1 Free, R2 ohne Egress-Gebühren.
 
-## Lizenz / Hinweise
+---
 
-Eigenständige Re-Implementierung — **kein** offizieller Anki-Code, daher kein AGPL-Bezug.
-„Anki" ist eine Marke von Ankitects Pty Ltd; dieses Projekt ist Anki-*ähnlich*, nicht offiziell
-sync-kompatibel.
+## Lizenz
+
+MIT
