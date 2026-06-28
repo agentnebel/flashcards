@@ -114,35 +114,39 @@ export default function Review() {
     return (
       <div className="empty stack">
         <p>🎉 Alles erledigt für jetzt!</p>
-        <Link to="/" className="btn">Zurück zu den Decks</Link>
+        <Link to="/" className="btn primary">Zurück zu den Decks</Link>
       </div>
     );
   }
 
   return (
-    <div>
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-        <Link to="/" className="muted">‹ Decks</Link>
-        <span className="muted">{queue.length} in der Schlange</span>
+    <div className="review">
+      <div className="review-head">
+        <Link to="/" className="tint-text">‹ Decks</Link>
+        <span className="queue">{queue.length} in der Schlange</span>
       </div>
 
       <div className="review-card">
         <div
-          className="card center"
+          key={revealed ? 'back' : 'front'}
+          className={`face${revealed ? ' back' : ''}`}
           dangerouslySetInnerHTML={{ __html: revealed ? rendered?.back ?? '' : rendered?.front ?? '' }}
         />
       </div>
 
       {!revealed ? (
-        <button className="primary" style={{ width: '100%', marginTop: '1rem' }} onClick={() => setRevealed(true)}>
-          Antwort zeigen <span className="muted">(Leertaste)</span>
-        </button>
+        <div className="answer-cta">
+          <button className="primary block" onClick={() => setRevealed(true)}>
+            Antwort zeigen
+          </button>
+          <p className="reveal-hint">(Leertaste)</p>
+        </div>
       ) : (
-        <div className="answers">
+        <div className="grade-bar">
           {GRADES.map(({ grade, label, cls }) => (
             <button key={grade} className={cls} onClick={() => onAnswer(grade)}>
-              <span>{label}</span>
-              <span className="ivl">{previews[grade] ? fmtInterval(previews[grade]) : ''}</span>
+              <span className="glabel">{label}</span>
+              <span className="givl">{previews[grade] ? fmtInterval(previews[grade]) : ''}</span>
             </button>
           ))}
         </div>

@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg'],
+      includeAssets: ['icon.svg', 'icon-maskable.svg'],
       workbox: {
         // /api/* niemals cachen — geht immer ans Netzwerk (Sync/Auth/Media)
         navigateFallbackDenylist: [/^\/api\//],
@@ -19,12 +19,15 @@ export default defineConfig({
         name: 'Flashcards',
         short_name: 'Flashcards',
         description: 'Spaced-Repetition-Lernkarten mit FSRS',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#ffffff',
+        background_color: '#ffffff',
         display: 'standalone',
+        display_override: ['standalone', 'minimal-ui'],
+        categories: ['education', 'productivity'],
         start_url: '/',
         icons: [
-          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: '/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
         ],
       },
     }),

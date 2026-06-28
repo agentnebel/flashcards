@@ -130,22 +130,28 @@ export default function AddCard() {
 
   return (
     <div>
-      <label>Deck</label>
-      <select value={deckId} onChange={(e) => setDeckId(e.target.value)}>
-        {decks.map((d) => (
-          <option key={d.id} value={d.id}>{d.name}</option>
-        ))}
-      </select>
+      <h1 className="screen-title">Neue Karte</h1>
 
-      <label>Notiztyp</label>
-      <select value={noteTypeId} onChange={(e) => setNoteTypeId(e.target.value)}>
-        {noteTypes.map((t) => (
-          <option key={t.id} value={t.id}>{t.name}</option>
-        ))}
-      </select>
+      <div className="field">
+        <label className="field-label" htmlFor="ac-deck">Deck</label>
+        <select id="ac-deck" value={deckId} onChange={(e) => setDeckId(e.target.value)}>
+          {decks.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label className="field-label" htmlFor="ac-nt">Notiztyp</label>
+        <select id="ac-nt" value={noteTypeId} onChange={(e) => setNoteTypeId(e.target.value)}>
+          {noteTypes.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
 
       {nt?.kind === 'cloze' && (
-        <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.75rem' }}>
+        <p className="info" style={{ margin: '0 0 var(--s4)' }}>
           Lückentext-Syntax: <code>{'{{c1::Antwort}}'}</code> oder mit Hinweis{' '}
           <code>{'{{c1::Antwort::Hinweis}}'}</code>.
         </p>
@@ -154,20 +160,21 @@ export default function AddCard() {
       {nt?.fields.map((f) => {
         const hashes = mediaHashesIn(fields[f] ?? '');
         return (
-          <div key={f}>
+          <div className="field" key={f}>
             <div className="field-head">
-              <label>{f}</label>
+              <label className="field-label" htmlFor={`ac-f-${f}`}>{f}</label>
               <button
                 type="button"
-                className="img-btn"
+                className="tint-text"
                 disabled={busyField === f}
                 onClick={() => fileInputRefs.current[f]?.click()}
                 title="Bild aus Datei einfügen"
               >
-                {busyField === f ? '…' : '📎 Bild'}
+                {busyField === f ? '…' : '+ Bild'}
               </button>
             </div>
             <textarea
+              id={`ac-f-${f}`}
               ref={(el) => { textareaRefs.current[f] = el; }}
               rows={f === nt.fields[0] && nt.kind === 'cloze' ? 4 : 2}
               value={fields[f] ?? ''}
@@ -198,7 +205,7 @@ export default function AddCard() {
         );
       })}
 
-      <button className="primary" style={{ width: '100%', marginTop: '1.25rem' }} disabled={!canSave} onClick={onSave}>
+      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave} onClick={onSave}>
         {saved ? '✓ Gespeichert' : 'Karte speichern'}
       </button>
     </div>

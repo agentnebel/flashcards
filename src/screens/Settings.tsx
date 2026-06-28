@@ -50,38 +50,47 @@ export default function Settings() {
   }
 
   return (
-    <div className="stack">
-      <section>
-        <h3>Konto &amp; Sync</h3>
-        {auth ? <Account email={auth.email} outbox={outboxCount} /> : <AuthForm />}
-      </section>
+    <div>
+      <h1 className="screen-title">Einstellungen</h1>
 
-      <section>
-        <h3>FSRS</h3>
-        <label>Ziel-Retention: {Math.round(retention * 100)} %</label>
-        <input
-          type="range"
-          min={0.8}
-          max={0.97}
-          step={0.01}
-          value={retention}
-          onChange={(e) => onRetention(parseFloat(e.target.value))}
-        />
-        <p className="muted" style={{ fontSize: '0.8rem' }}>
-          Höher = häufigere Wiederholungen, bessere Behaltensquote.
-        </p>
-      </section>
-
-      <section>
-        <h3>Daten</h3>
-        <div className="row">
-          <button onClick={onExport}>JSON-Backup exportieren</button>
-          <Link to="/import" className="btn">Importieren (CSV/.apkg)</Link>
+      <div className="section">
+        <h2 className="section-head">FSRS</h2>
+        <div className="group" style={{ padding: 'var(--s4)' }}>
+          <label className="field-label" htmlFor="retention">
+            Ziel-Retention: {Math.round(retention * 100)} %
+          </label>
+          <input
+            id="retention"
+            type="range"
+            min={0.8}
+            max={0.97}
+            step={0.01}
+            value={retention}
+            onChange={(e) => onRetention(parseFloat(e.target.value))}
+          />
+          <p className="info" style={{ marginTop: 'var(--s2)', marginBottom: 0 }}>
+            Höher = häufigere Wiederholungen, bessere Behaltensquote.
+          </p>
         </div>
-        <p className="muted" style={{ fontSize: '0.8rem' }}>
-          Ausstehende, noch nicht gesyncte Änderungen: {outboxCount}
-        </p>
-      </section>
+      </div>
+
+      <div className="section">
+        <h2 className="section-head">Konto &amp; Sync</h2>
+        {auth ? <Account email={auth.email} outbox={outboxCount} /> : <AuthForm />}
+      </div>
+
+      <div className="section">
+        <h2 className="section-head">Daten</h2>
+        <div className="group" style={{ padding: 'var(--s4)' }}>
+          <div className="stack">
+            <button className="block" onClick={onExport}>JSON-Backup exportieren</button>
+            <Link to="/import" className="btn block">Importieren (CSV/.apkg)</Link>
+          </div>
+          <p className="info" style={{ marginTop: 'var(--s3)', marginBottom: 0 }}>
+            Ausstehende, noch nicht gesyncte Änderungen: {outboxCount}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -89,22 +98,22 @@ export default function Settings() {
 function Account({ email, outbox }: { email: string; outbox: number }) {
   const syncState = useSync();
   return (
-    <div className="stack">
-      <p className="muted" style={{ fontSize: '0.85rem' }}>
-        Angemeldet als <strong style={{ color: 'var(--text)' }}>{email}</strong>
-      </p>
-      <div className="row">
-        <button className="primary" disabled={syncState.syncing} onClick={() => void sync()}>
-          {syncState.syncing ? 'Synchronisiere…' : 'Jetzt synchronisieren'}
-        </button>
-        <button onClick={() => void logout()}>Abmelden</button>
+    <div className="group" style={{ padding: 'var(--s4)' }}>
+      <div className="stack">
+        <p className="info" style={{ margin: 0 }}>
+          Angemeldet als <strong style={{ color: 'var(--label)' }}>{email}</strong>
+        </p>
+        <div className="row">
+          <button className="primary" disabled={syncState.syncing} onClick={() => void sync()}>
+            {syncState.syncing ? 'Synchronisiere…' : 'Jetzt synchronisieren'}
+          </button>
+          <button onClick={() => void logout()}>Abmelden</button>
+        </div>
+        <p className="info" style={{ margin: 0 }}>
+          Letzter Sync: {fmtTime(syncState.lastSyncAt)} · offen: {outbox}
+        </p>
+        {syncState.error && <p className="feedback err">{syncState.error}</p>}
       </div>
-      <p className="muted" style={{ fontSize: '0.8rem' }}>
-        Letzter Sync: {fmtTime(syncState.lastSyncAt)} · offen: {outbox}
-      </p>
-      {syncState.error && (
-        <p style={{ fontSize: '0.8rem', color: 'var(--again)' }}>{syncState.error}</p>
-      )}
     </div>
   );
 }
@@ -132,22 +141,24 @@ function AuthForm() {
   const valid = email.includes('@') && password.length >= 8;
 
   return (
-    <div className="stack">
-      <p className="muted" style={{ fontSize: '0.8rem' }}>
+    <div className="group" style={{ padding: 'var(--s4)' }}>
+      <p className="info" style={{ marginTop: 0 }}>
         Anmelden für geräteübergreifenden Sync. Lokale Karten bleiben erhalten und werden hochgeladen.
       </p>
-      <div>
-        <label>E-Mail</label>
+      <div className="field">
+        <label className="field-label" htmlFor="auth-email">E-Mail</label>
         <input
+          id="auth-email"
           type="email"
           autoComplete="username"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
       </div>
-      <div>
-        <label>Passwort (min. 8 Zeichen)</label>
+      <div className="field">
+        <label className="field-label" htmlFor="auth-pw">Passwort (min. 8 Zeichen)</label>
         <input
+          id="auth-pw"
           type="password"
           autoComplete="current-password"
           value={password}
@@ -162,7 +173,7 @@ function AuthForm() {
           Registrieren
         </button>
       </div>
-      {error && <p style={{ fontSize: '0.8rem', color: 'var(--again)' }}>{error}</p>}
+      {error && <p className="feedback err" style={{ marginTop: 'var(--s3)' }}>{error}</p>}
     </div>
   );
 }

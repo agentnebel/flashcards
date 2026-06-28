@@ -11,6 +11,13 @@ const STATE_LABEL: Record<number, string> = {
   [State.Relearning]: 'relearn',
 };
 
+const STATE_CHIP: Record<number, string> = {
+  [State.New]: 'new',
+  [State.Learning]: 'learning',
+  [State.Review]: 'review',
+  [State.Relearning]: 'relearn',
+};
+
 // HTML-Tags (z. B. eingebettete <img>-Bilder) für die Listen-Vorschau entfernen.
 function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, '').trim();
@@ -29,29 +36,52 @@ export default function Browse() {
 
   return (
     <div>
-      <input placeholder="Suchen…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <h1 className="screen-title">Karten</h1>
 
-      {filtered.length === 0 && <p className="empty">Keine Karten.</p>}
-
-      <div style={{ marginTop: '1rem' }}>
-        {filtered.map((n) => {
-          const noteCards = cards.filter((c) => c.noteId === n.id && !c.deleted);
-          const states = noteCards.map((c) => STATE_LABEL[c.fsrs.state] ?? '?');
-          return (
-            <div key={n.id} className="card-tile">
-              <div style={{ minWidth: 0 }}>
-                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {stripTags(n.sortField) || <span className="muted">(leer)</span>}
-                </div>
-                <div className="meta">
-                  {noteCards.length} Karte(n) · {states.join(', ')}
-                </div>
-              </div>
-              <button onClick={() => deleteNote(n.id)} title="Löschen">🗑</button>
-            </div>
-          );
-        })}
+      <div className="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4.3-4.3" />
+        </svg>
+        <input placeholder="Suchen…" aria-label="Karten suchen" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+
+      {filtered.length === 0 ? (
+        <p className="empty">Keine Karten.</p>
+      ) : (
+        <div className="group">
+          {filtered.map((n) => {
+            const noteCards = cards.filter((c) => c.noteId === n.id && !c.deleted);
+            const seen = new Set<number>();
+            const distinctStates = noteCards
+              .map((c) => c.fsrs.state)
+              .filter((s) => (seen.has(s) ? false : (seen.add(s), true)));
+            return (
+              <div key={n.id} className="row-item">
+                <div className="row-grow">
+                  <div className="row-title">
+                    {stripTags(n.sortField) || <span className="muted">(leer)</span>}
+                  </div>
+                  <div className="row-sub">
+                    {noteCards.length} Karte(n)
+                    {distinctStates.length > 0 && ' · '}
+                    {distinctStates.map((s) => (
+                      <span key={s} className={`chip ${STATE_CHIP[s] ?? 'new'}`} style={{ marginLeft: 4 }}>
+                        {STATE_LABEL[s] ?? '?'}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <button className="tint-text destructive" onClick={() => deleteNote(n.id)} title="Löschen" aria-label="Karte löschen" style={{ minWidth: 44, minHeight: 44 }}>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+                  </svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
