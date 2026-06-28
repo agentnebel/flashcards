@@ -2,8 +2,6 @@
 
 Eine Lernkarten-App fürs Handy und den Browser. Karten anlegen, lernen, von überall synchronisieren — kein Account bei einem Drittanbieter nötig, keine Werbung, kein Abo.
 
-**Live:** [flashcards.forsven.workers.dev](https://flashcards.forsven.workers.dev)
-
 ---
 
 ## Screenshots
