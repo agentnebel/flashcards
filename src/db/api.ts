@@ -204,6 +204,29 @@ export async function importNotes(params: {
   return imported;
 }
 
+// Lern-Streak: aufeinanderfolgende lokale Tage mit mindestens einem Review.
+// Heute noch nichts gelernt? Streak bleibt bis Tagesende erhalten (ab gestern gezählt).
+export async function getReviewStreak(): Promise<number> {
+  const keys = (await db.revlog.orderBy('reviewedAt').keys()) as number[];
+  if (keys.length === 0) return 0;
+  const dayKey = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  };
+  const days = new Set(keys.map(dayKey));
+  const cursor = new Date();
+  if (!days.has(dayKey(cursor.getTime()))) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!days.has(dayKey(cursor.getTime()))) return 0;
+  }
+  let streak = 0;
+  while (days.has(dayKey(cursor.getTime()))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
 // Lernschlange: fällige Lern-/Review-Karten zuerst, dann limitierte neue Karten.
 export async function getStudyQueue(deckId: string, newLimit = 20): Promise<Card[]> {
   const now = new Date();

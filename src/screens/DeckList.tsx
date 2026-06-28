@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { db } from '../db/db';
 import type { Deck } from '../db/db';
-import { createDeck, deleteDeck, renameDeck } from '../db/api';
+import { createDeck, deleteDeck, getReviewStreak, renameDeck } from '../db/api';
 
 export default function DeckList() {
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const cards = useLiveQuery(() => db.cards.toArray(), []);
+  const streak = useLiveQuery(() => getReviewStreak(), []);
   const [name, setName] = useState('');
   const [editMode, setEditMode] = useState(false);
   const navigate = useNavigate();
@@ -22,6 +23,12 @@ export default function DeckList() {
       fresh: active.filter((c) => c.fsrs.state === 0).length,
     };
   };
+
+  // Summe heute fälliger + neuer Karten über alle Decks (für die Kopfzeile).
+  const activeAll = cards.filter((c) => !c.suspended && !c.deleted);
+  const dueToday =
+    activeAll.filter((c) => c.fsrs.state !== 0 && c.due.getTime() <= now).length +
+    activeAll.filter((c) => c.fsrs.state === 0).length;
 
   async function onCreate() {
     const n = name.trim();
@@ -49,6 +56,21 @@ export default function DeckList() {
           </button>
         )}
       </div>
+
+      {decks.length > 0 && (
+        <div className="study-summary">
+          <span className="summary-stat">
+            <span className="summary-flame" aria-hidden="true">🔥</span>
+            <span className="summary-num">{streak ?? 0}</span>
+            <span className="summary-label">{(streak ?? 0) === 1 ? 'Tag Streak' : 'Tage Streak'}</span>
+          </span>
+          <span className="summary-divider" aria-hidden="true" />
+          <span className="summary-stat">
+            <span className="summary-num">{dueToday}</span>
+            <span className="summary-label">heute fällig</span>
+          </span>
+        </div>
+      )}
 
       {decks.length === 0 ? (
         <p className="empty">Noch keine Decks. Lege unten eines an.</p>

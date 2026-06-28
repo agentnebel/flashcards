@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db';
 import { deleteNote } from '../db/api';
@@ -19,6 +19,8 @@ const STATE_CHIP: Record<number, string> = {
   [State.Relearning]: 'relearn',
 };
 
+const PAGE = 50; // Fenstergröße fürs schrittweise Nachladen
+
 // HTML-Tags (z. B. eingebettete <img>-Bilder) für die Listen-Vorschau entfernen.
 function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, '').trim();
@@ -28,13 +30,32 @@ export default function Browse() {
   const notes = useLiveQuery(() => db.notes.orderBy('updatedAt').reverse().toArray(), []);
   const cards = useLiveQuery(() => db.cards.toArray(), []);
   const [q, setQ] = useState('');
+  const [visible, setVisible] = useState(PAGE);
+  const sentinel = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
-  if (!notes || !cards) return <p className="muted">Lädt…</p>;
+  // Bei neuer Suche das Fenster zurücksetzen.
+  useEffect(() => { setVisible(PAGE); }, [q]);
 
-  const filtered = notes.filter(
+  const filtered = (notes ?? []).filter(
     (n) => !n.deleted && (!q || JSON.stringify(n.fields).toLowerCase().includes(q.toLowerCase())),
   );
+  const shown = filtered.slice(0, visible);
+  const hasMore = filtered.length > visible;
+
+  // Sentinel am Listenende lädt schrittweise nach, statt alles auf einmal zu rendern.
+  useEffect(() => {
+    if (!hasMore) return;
+    const el = sentinel.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) setVisible((v) => v + PAGE);
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, shown.length]);
+
+  if (!notes || !cards) return <p className="muted">Lädt…</p>;
 
   return (
     <div>
@@ -52,7 +73,7 @@ export default function Browse() {
         <p className="empty">Keine Karten.</p>
       ) : (
         <div className="group">
-          {filtered.map((n) => {
+          {shown.map((n) => {
             const noteCards = cards.filter((c) => c.noteId === n.id && !c.deleted);
             const seen = new Set<number>();
             const distinctStates = noteCards
@@ -88,6 +109,7 @@ export default function Browse() {
               </div>
             );
           })}
+          {hasMore && <div ref={sentinel} className="list-sentinel" aria-hidden="true" />}
         </div>
       )}
     </div>
