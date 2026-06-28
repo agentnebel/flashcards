@@ -107,6 +107,7 @@ export default function App() {
           <Route path="/" element={<DeckList />} />
           <Route path="/deck/:deckId/study" element={<Review />} />
           <Route path="/add" element={<AddCard />} />
+          <Route path="/edit/:noteId" element={<AddCard />} />
           <Route path="/browse" element={<Browse />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/import" element={<Import />} />

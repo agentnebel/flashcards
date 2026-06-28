@@ -259,6 +259,83 @@ a { color: inherit; text-decoration: none; }
 }
 .chevron{ color: var(--label-3); font-size: 20px; line-height: 1; flex: 0 0 auto; }
 
+/* Inline deck rename input */
+.inline-rename{
+  flex: 1;
+  font: inherit;
+  font-size: var(--t-headline);
+  font-weight: 600;
+  color: var(--label);
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px solid var(--tint);
+  outline: none;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+/* Icon-only button (edit / delete / more) */
+.icon-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--label-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.icon-btn:hover{ color: var(--label); background: var(--fill); }
+.icon-btn.destructive{ color: var(--again); }
+.icon-btn.destructive:hover{ background: color-mix(in srgb, var(--again) 12%, transparent); }
+
+/* Contextual action menu (deck options) */
+.action-menu{
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  background: var(--surface);
+  border-radius: var(--r-group);
+  box-shadow: 0 4px 24px rgba(0,0,0,.14), 0 1px 4px rgba(0,0,0,.08);
+  overflow: hidden;
+  min-width: 160px;
+}
+.action-menu button{
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--s3) var(--s4);
+  font: inherit;
+  font-size: var(--t-subhead);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--label);
+}
+.action-menu button + button{ border-top: 0.5px solid var(--separator); }
+.action-menu button:hover{ background: var(--fill); }
+.action-menu button.destructive{ color: var(--again); }
+
+/* Back link on edit screen */
+.back-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--t-subhead);
+  color: var(--tint);
+  background: none;
+  border: none;
+  padding: 0;
+  margin-bottom: var(--s4);
+  cursor: pointer;
+  font: inherit;
+}
+
 /* Count pills */
 .pill{
   display: inline-flex;

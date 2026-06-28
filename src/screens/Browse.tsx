@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db';
 import { deleteNote } from '../db/api';
 import { State } from 'ts-fsrs';
@@ -27,6 +28,7 @@ export default function Browse() {
   const notes = useLiveQuery(() => db.notes.orderBy('updatedAt').reverse().toArray(), []);
   const cards = useLiveQuery(() => db.cards.toArray(), []);
   const [q, setQ] = useState('');
+  const navigate = useNavigate();
 
   if (!notes || !cards) return <p className="muted">Lädt…</p>;
 
@@ -72,7 +74,13 @@ export default function Browse() {
                     ))}
                   </div>
                 </div>
-                <button className="tint-text destructive" onClick={() => deleteNote(n.id)} title="Löschen" aria-label="Karte löschen" style={{ minWidth: 44, minHeight: 44 }}>
+                <button className="icon-btn" onClick={() => navigate(`/edit/${n.id}`)} title="Bearbeiten" aria-label="Karte bearbeiten" style={{ minWidth: 44, minHeight: 44 }}>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                </button>
+                <button className="icon-btn destructive" onClick={() => void deleteNote(n.id)} title="Löschen" aria-label="Karte löschen" style={{ minWidth: 44, minHeight: 44 }}>
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
                   </svg>

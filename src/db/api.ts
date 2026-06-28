@@ -73,6 +73,59 @@ export async function addNote(params: {
   });
 }
 
+export async function renameDeck(deckId: string, name: string): Promise<void> {
+  const deck = await db.decks.get(deckId);
+  if (!deck) return;
+  const now = Date.now();
+  const updated: Deck = { ...deck, name, updatedAt: now, usn: -1 };
+  await db.transaction('rw', db.decks, db.outbox, async () => {
+    await db.decks.put(updated);
+    await db.outbox.add({ op: 'upsert', entity: 'deck', entityId: deckId, payload: updated, createdAt: now });
+  });
+}
+
+export async function deleteDeck(deckId: string): Promise<void> {
+  const now = Date.now();
+  const notes = await db.notes.where('deckId').equals(deckId).toArray();
+  const cards = await db.cards.where('deckId').equals(deckId).toArray();
+  await db.transaction('rw', db.decks, db.notes, db.cards, db.outbox, async () => {
+    await db.decks.delete(deckId);
+    await db.notes.where('deckId').equals(deckId).delete();
+    await db.cards.where('deckId').equals(deckId).delete();
+    await db.outbox.add({ op: 'delete', entity: 'deck', entityId: deckId, payload: null, createdAt: now });
+    for (const n of notes) {
+      await db.outbox.add({ op: 'delete', entity: 'note', entityId: n.id, payload: null, createdAt: now });
+    }
+    for (const c of cards) {
+      await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
+    }
+  });
+}
+
+export async function updateNote(
+  noteId: string,
+  fields: Record<string, string>,
+  newDeckId?: string,
+): Promise<void> {
+  const note = await db.notes.get(noteId);
+  if (!note) return;
+  const nt = await db.noteTypes.get(note.noteTypeId);
+  if (!nt) return;
+  const now = Date.now();
+  const deckId = newDeckId ?? note.deckId;
+  const updated: Note = { ...note, fields, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now, usn: -1 };
+  const noteCards = await db.cards.where('noteId').equals(noteId).toArray();
+  const updatedCards = noteCards.map((c) => ({ ...c, deckId, updatedAt: now, usn: -1 as const }));
+  await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+    await db.notes.put(updated);
+    await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
+    for (const c of updatedCards) {
+      await db.cards.put(c);
+      await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
+    }
+  });
+}
+
 export async function deleteNote(noteId: string): Promise<void> {
   const now = Date.now();
   const cards = await db.cards.where('noteId').equals(noteId).toArray();

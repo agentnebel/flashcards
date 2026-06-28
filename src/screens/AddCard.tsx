@@ -1,8 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { db } from '../db/db';
-import { addNote } from '../db/api';
+import { addNote, updateNote } from '../db/api';
 import { mediaUrl, storeImage } from '../lib/media';
 
 // Findet alle flashmedia:HASH-Referenzen in einem Feldtext (für die Thumbnail-Leiste).
@@ -21,34 +22,50 @@ function removeMediaTag(text: string, hash: string): string {
 }
 
 export default function AddCard() {
+  const { noteId } = useParams<{ noteId?: string }>();
+  const isEdit = Boolean(noteId);
+  const navigate = useNavigate();
+
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const noteTypes = useLiveQuery(() => db.noteTypes.toArray(), []);
+  const existingNote = useLiveQuery(() => noteId ? db.notes.get(noteId) : Promise.resolve(undefined), [noteId]) as import('../db/db').Note | undefined;
 
   const [deckId, setDeckId] = useState('');
   const [noteTypeId, setNoteTypeId] = useState('');
   const [fields, setFields] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [busyField, setBusyField] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
-  // Refs auf die Textareas, um die aktuelle Caret-Position zu lesen.
   const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
-  // Versteckte File-Inputs je Feld.
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  // Zuletzt bekannte Caret-Position je Feld (für Paste/Insert).
   const caretRefs = useRef<Record<string, number>>({});
 
+  // Edit-Modus: Note-Daten einladen (nur einmal)
   useEffect(() => {
+    if (!isEdit || !existingNote || loaded) return;
+    setDeckId(existingNote.deckId);
+    setNoteTypeId(existingNote.noteTypeId);
+    setFields(existingNote.fields);
+    setLoaded(true);
+  }, [isEdit, existingNote, loaded]);
+
+  // Neu-Modus: Defaults setzen
+  useEffect(() => {
+    if (isEdit) return;
     if (decks && decks.length && !deckId) setDeckId(decks[0].id);
-  }, [decks, deckId]);
+  }, [decks, deckId, isEdit]);
   useEffect(() => {
+    if (isEdit) return;
     if (noteTypes && noteTypes.length && !noteTypeId) setNoteTypeId(noteTypes[0].id);
-  }, [noteTypes, noteTypeId]);
+  }, [noteTypes, noteTypeId, isEdit]);
 
   const nt = useMemo(() => noteTypes?.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
 
   useEffect(() => {
+    if (isEdit) return;
     if (nt) setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
-  }, [nt]);
+  }, [nt, isEdit]);
 
   if (!decks || !noteTypes) return <p className="muted">Lädt…</p>;
 
@@ -121,16 +138,25 @@ export default function AddCard() {
 
   async function onSave() {
     if (!nt || !deckId) return;
-    await addNote({ noteTypeId: nt.id, deckId, fields });
-    setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
-    caretRefs.current = {};
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    if (isEdit && noteId) {
+      await updateNote(noteId, fields, deckId);
+      setSaved(true);
+      setTimeout(() => { setSaved(false); navigate('/browse'); }, 1000);
+    } else {
+      await addNote({ noteTypeId: nt.id, deckId, fields });
+      setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
+      caretRefs.current = {};
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    }
   }
 
   return (
     <div>
-      <h1 className="screen-title">Neue Karte</h1>
+      <h1 className="screen-title">{isEdit ? 'Karte bearbeiten' : 'Neue Karte'}</h1>
+      {isEdit && (
+        <button className="back-btn" onClick={() => navigate('/browse')}>← Zurück</button>
+      )}
 
       <div className="field">
         <label className="field-label" htmlFor="ac-deck">Deck</label>
@@ -205,8 +231,8 @@ export default function AddCard() {
         );
       })}
 
-      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave} onClick={onSave}>
-        {saved ? '✓ Gespeichert' : 'Karte speichern'}
+      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave} onClick={() => void onSave()}>
+        {saved ? '✓ Gespeichert' : isEdit ? 'Änderungen speichern' : 'Karte speichern'}
       </button>
     </div>
   );
