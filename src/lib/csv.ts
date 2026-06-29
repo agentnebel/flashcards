@@ -1,14 +1,34 @@
 // Robuster CSV/TSV-Parser: erkennt Trennzeichen, behandelt Anführungszeichen
 // (inkl. ""-Escaping und Zeilenumbrüchen innerhalb von Feldern).
 
+// Führendes UTF-8-BOM entfernen (Excel „CSV UTF-8" stellt U+FEFF voran).
+function stripBom(s: string): string {
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
+
+// Zählt ein Kandidaten-Trennzeichen nur außerhalb von Anführungszeichen.
+function countOutsideQuotes(s: string, delim: string): number {
+  let inQuotes = false;
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') {
+      if (inQuotes && s[i + 1] === '"') { i++; continue; } // escaptes ""
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && c === delim) n++;
+  }
+  return n;
+}
+
 export function detectDelimiter(text: string): string {
-  const sample = text.slice(0, 5000).split('\n').slice(0, 20).join('\n');
+  const sample = stripBom(text).slice(0, 5000);
   const candidates = [',', '\t', ';'];
   let best = ',';
   let bestCount = -1;
   for (const d of candidates) {
-    // Nur Trennzeichen außerhalb von Quotes grob zählen reicht zur Erkennung.
-    const count = sample.split(d).length - 1;
+    const count = countOutsideQuotes(sample, d);
     if (count > bestCount) {
       bestCount = count;
       best = d;
@@ -18,6 +38,7 @@ export function detectDelimiter(text: string): string {
 }
 
 export function parseDelimited(text: string, delimiter: string): string[][] {
+  const src = stripBom(text);
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -34,11 +55,11 @@ export function parseDelimited(text: string, delimiter: string): string[][] {
     row = [];
   };
 
-  while (i < text.length) {
-    const c = text[i];
+  while (i < src.length) {
+    const c = src[i];
     if (inQuotes) {
       if (c === '"') {
-        if (text[i + 1] === '"') {
+        if (src[i + 1] === '"') {
           field += '"';
           i += 2;
           continue;
@@ -62,6 +83,8 @@ export function parseDelimited(text: string, delimiter: string): string[][] {
       continue;
     }
     if (c === '\r') {
+      if (src[i + 1] === '\n') { i++; continue; } // \r\n: \r überspringen, \n beendet die Zeile
+      endRow(); // alleinstehendes \r (klassisches Mac / manche Excel-Exporte) beendet die Zeile
       i++;
       continue;
     }

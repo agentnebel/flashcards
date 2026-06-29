@@ -132,6 +132,10 @@ class FlashcardsDB extends Dexie {
       meta: 'key',
       media: 'hash, createdAt, synced',
     });
+    // v3: guid-Index auf notes für GUID-Dedup beim (Re-)Import von .apkg.
+    this.version(3).stores({
+      notes: 'id, guid, deckId, noteTypeId, updatedAt',
+    });
   }
 }
 

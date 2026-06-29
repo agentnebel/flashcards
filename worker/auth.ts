@@ -44,15 +44,21 @@ export async function signJwt(
 }
 
 export async function verifyJwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const data = parts[0] + '.' + parts[1];
-  const key = await hmacKey(secret);
-  const ok = await crypto.subtle.verify('HMAC', key, b64urlDecode(parts[2]), enc.encode(data));
-  if (!ok) return null;
-  const payload = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[1]))) as Record<string, unknown>;
-  if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload;
+  // Komplett defensiv: ein fehlerhaftes Token (kein base64url, kaputtes JSON) darf
+  // niemals als unbehandelte Exception nach oben durchschlagen (sonst 500 statt 401).
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const data = parts[0] + '.' + parts[1];
+    const key = await hmacKey(secret);
+    const ok = await crypto.subtle.verify('HMAC', key, b64urlDecode(parts[2]), enc.encode(data));
+    if (!ok) return null;
+    const payload = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[1]))) as Record<string, unknown>;
+    if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 // ---- Passwort-Hashing (PBKDF2-SHA256) ----
@@ -70,8 +76,24 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
   const [scheme, iterStr, saltB64, hashB64] = stored.split('$');
   if (scheme !== 'pbkdf2') return false;
   const bits = await pbkdf2(password, b64urlDecode(saltB64), parseInt(iterStr, 10));
-  return b64urlEncode(bits) === hashB64;
+  return timingSafeEqual(b64urlEncode(bits), hashB64);
 }
+
+// Konstantzeit-Stringvergleich (vermeidet Timing-Seitenkanal beim Hash-Abgleich).
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function normalizeEmail(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+}
+function secretOk(env: Env): boolean {
+  return typeof env.JWT_SECRET === 'string' && env.JWT_SECRET.length >= 16;
+}
+const MAX_PW = 1024;
 
 interface Creds {
   email?: string;
@@ -79,9 +101,14 @@ interface Creds {
 }
 
 export async function handleRegister(req: IRequest, env: Env): Promise<Response> {
-  const { email, password } = (await req.json().catch(() => ({}))) as Creds;
-  if (!email || !password || password.length < 8) return error(400, 'email und password (min. 8 Zeichen) erforderlich');
-  const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
+  const creds = (await req.json().catch(() => ({}))) as Creds;
+  const email = normalizeEmail(creds.email);
+  const password = creds.password ?? '';
+  if (!email || !email.includes('@') || email.length > 320) return error(400, 'Gültige E-Mail erforderlich');
+  if (password.length < 8 || password.length > MAX_PW) return error(400, 'Passwort muss 8–1024 Zeichen lang sein');
+  // Case-insensitiver Duplikat-Check, damit User@x.com und user@x.com nicht zwei Konten werden.
+  const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(email).first();
   if (existing) return error(409, 'E-Mail bereits registriert');
   const id = crypto.randomUUID();
   const hash = await hashPassword(password);
@@ -93,18 +120,23 @@ export async function handleRegister(req: IRequest, env: Env): Promise<Response>
 }
 
 export async function handleLogin(req: IRequest, env: Env): Promise<Response> {
-  const { email, password } = (await req.json().catch(() => ({}))) as Creds;
-  if (!email || !password) return error(400, 'email und password erforderlich');
-  const row = await env.DB.prepare('SELECT id, password_hash FROM users WHERE email = ?')
+  if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
+  const creds = (await req.json().catch(() => ({}))) as Creds;
+  const email = normalizeEmail(creds.email);
+  const password = creds.password ?? '';
+  if (!email || !password || password.length > MAX_PW) return error(400, 'email und password erforderlich');
+  // COLLATE NOCASE matcht auch Altkonten, deren E-Mail in gemischter Schreibweise gespeichert ist.
+  const row = await env.DB.prepare('SELECT id, email, password_hash FROM users WHERE email = ? COLLATE NOCASE')
     .bind(email)
-    .first<{ id: string; password_hash: string }>();
+    .first<{ id: string; email: string; password_hash: string }>();
   if (!row || !(await verifyPassword(password, row.password_hash))) return error(401, 'Ungültige Anmeldedaten');
   const token = await signJwt({ sub: row.id }, env.JWT_SECRET);
-  return json({ token, user: { id: row.id, email } });
+  return json({ token, user: { id: row.id, email: row.email } });
 }
 
 // Middleware: setzt req.userId oder bricht mit 401 ab.
 export async function requireAuth(req: IRequest, env: Env): Promise<Response | void> {
+  if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
   const header = req.headers.get('Authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   const payload = token ? await verifyJwt(token, env.JWT_SECRET) : null;

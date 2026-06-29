@@ -7,7 +7,9 @@ import { addNote, updateNote } from '../db/api';
 import { mediaUrl, storeImage } from '../lib/media';
 
 // Findet alle flashmedia:HASH-Referenzen in einem Feldtext (für die Thumbnail-Leiste).
-const FIELD_MEDIA_RE = /<img\s+src=(["'])flashmedia:([a-f0-9]+)\1[^>]*>/g;
+// Tolerant gegenüber Attributen vor src (z. B. <img alt="x" src="flashmedia:…">), wie sie
+// aus .apkg-Importen entstehen — sonst wären solche Bilder im Editor unsichtbar/nicht entfernbar.
+const FIELD_MEDIA_RE = /<img\b[^>]*?\bsrc=(["'])flashmedia:([a-f0-9]+)\1[^>]*>/gi;
 
 function mediaHashesIn(text: string): string[] {
   const out: string[] = [];
@@ -17,7 +19,8 @@ function mediaHashesIn(text: string): string[] {
 
 // Entfernt das <img>-Tag eines bestimmten Hashes aus dem Feldtext (Blob bleibt erhalten).
 function removeMediaTag(text: string, hash: string): string {
-  const re = new RegExp(`<img\\s+src=(["'])flashmedia:${hash}\\1[^>]*>`, 'g');
+  const safe = hash.replace(/[^a-f0-9]/gi, ''); // Hash ist Hex; defensiv säubern fürs RegExp
+  const re = new RegExp(`<img\\b[^>]*?\\bsrc=(["'])flashmedia:${safe}\\1[^>]*>`, 'gi');
   return text.replace(re, '');
 }
 
@@ -35,20 +38,23 @@ export default function AddCard() {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [busyField, setBusyField] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
 
   const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const caretRefs = useRef<Record<string, number>>({});
+  const loadedNoteIdRef = useRef<string | null>(null);
 
-  // Edit-Modus: Note-Daten einladen (nur einmal)
+  // Edit-Modus: Note-Daten einladen. Pro noteId genau einmal — aber beim Wechsel
+  // /edit/A → /edit/B (gleiche Komponenteninstanz) erneut laden, sonst zeigt/speichert
+  // das Formular die Daten der vorherigen Karte (Datenverlust-Risiko).
   useEffect(() => {
-    if (!isEdit || !existingNote || loaded) return;
+    if (!isEdit || !existingNote) return;
+    if (loadedNoteIdRef.current === existingNote.id) return;
     setDeckId(existingNote.deckId);
     setNoteTypeId(existingNote.noteTypeId);
     setFields(existingNote.fields);
-    setLoaded(true);
-  }, [isEdit, existingNote, loaded]);
+    loadedNoteIdRef.current = existingNote.id;
+  }, [isEdit, existingNote]);
 
   // Neu-Modus: Defaults setzen
   useEffect(() => {

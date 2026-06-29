@@ -51,6 +51,7 @@ export default function App() {
   // Auto-Sync: bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch.
   useEffect(() => {
     const trigger = async () => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return; // offline: kein Versuch
       if (await getAuth()) void sync();
     };
     loadLastSyncAt();

@@ -53,6 +53,16 @@ function mimeFromName(name: string): string {
   return map[ext] ?? 'application/octet-stream';
 }
 
+// decodeURIComponent wirft bei ungültigen %-Sequenzen (z. B. "100%.png") und würde
+// sonst den ganzen Import abbrechen — hier tolerant auf den Rohwert zurückfallen.
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const copy = new Uint8Array(bytes); // eigener ArrayBuffer (kein SharedArrayBuffer)
   const digest = await crypto.subtle.digest('SHA-256', copy);
@@ -163,24 +173,29 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
       nameToHash[filename] = hash;
     }
 
-    // --- Notizen laden ---
-    const notesRes = sqldb.exec('SELECT mid, flds FROM notes');
-    const rows = (notesRes[0]?.values ?? []) as [number | string, string][];
+    // --- Notizen laden (inkl. Anki-guid für Dedup) ---
+    const notesRes = sqldb.exec('SELECT guid, mid, flds FROM notes');
+    const rows = (notesRes[0]?.values ?? []) as [string, number | string, string][];
 
     // Pass 1: alle referenzierten Bilder einsammeln und lokal ablegen.
     const allNames = new Set<string>();
-    for (const [, flds] of rows) {
+    for (const [, , flds] of rows) {
       for (const v of String(flds).split(FIELD_SEP)) {
-        for (const m of v.matchAll(IMG_RE)) allNames.add(decodeURIComponent(m[2]));
+        for (const m of v.matchAll(IMG_RE)) allNames.add(safeDecode(m[2]));
       }
     }
     for (const n of allNames) await ensureMedia(n);
 
     const rewrite = (value: string): string =>
       value.replace(IMG_RE, (full, pre: string, src: string, post: string) => {
-        const h = nameToHash[decodeURIComponent(src)];
+        const h = nameToHash[safeDecode(src)];
         return h ? `${pre}flashmedia:${h}${post}` : full;
       });
+
+    // Bereits vorhandene Anki-guids: erneut importierte Notizen werden übersprungen,
+    // statt jede Karte (und Medien) bei jedem Re-Import zu duplizieren.
+    const existingGuids = new Set((await db.notes.orderBy('guid').keys()) as string[]);
+    let skipped = 0;
 
     // Pass 2: Notizen + Karten in Batches anlegen.
     let noteCount = 0;
@@ -189,22 +204,25 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
     for (let start = 0; start < rows.length; start += CHUNK) {
       const slice = rows.slice(start, start + CHUNK);
       await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
-        for (const [mid, flds] of slice) {
+        for (const [guid, mid, flds] of slice) {
           const ntId = modelToNt[String(mid)];
           const fieldNames = modelFields[String(mid)];
           const nt = modelNt[String(mid)];
           if (!ntId || !fieldNames || !nt) continue;
+          const noteGuid = String(guid);
+          if (existingGuids.has(noteGuid)) { skipped++; continue; } // schon importiert → überspringen
           const values = String(flds).split(FIELD_SEP);
           const fields: Record<string, string> = {};
           fieldNames.forEach((name, i) => {
             fields[name] = rewrite(values[i] ?? '');
           });
           if (!Object.values(fields).some((v) => v.trim())) continue;
+          existingGuids.add(noteGuid); // auch innerhalb desselben Imports nicht doppeln
 
           const id = uuid();
           const note: Note = {
             id,
-            guid: uuid(),
+            guid: noteGuid,
             noteTypeId: ntId,
             deckId,
             fields,
@@ -241,8 +259,11 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
       });
     }
 
-    if (rows.some(([, f]) => String(f).includes('[sound:'))) {
+    if (rows.some(([, , f]) => String(f).includes('[sound:'))) {
       warnings.push('Audio-Verweise ([sound:…]) bleiben als Text erhalten (Audio noch nicht unterstützt).');
+    }
+    if (skipped > 0) {
+      warnings.push(`${skipped} bereits vorhandene Notiz(en) übersprungen (gleiche GUID).`);
     }
 
     return { noteTypes: noteTypeCount, notes: noteCount, cards: cardCount, media: mediaCount, warnings };

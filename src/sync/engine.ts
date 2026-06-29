@@ -88,8 +88,28 @@ export async function login(email: string, password: string): Promise<Auth> {
   return authResult(await apiPost('/api/auth/login', { email, password }));
 }
 export async function logout(): Promise<void> {
-  await db.meta.delete('auth');
-  await setCursor(0); // nächste Anmeldung startet mit vollständigem Pull
+  // Lokale Daten vollständig löschen. Sonst blieben auf einem geteilten Gerät die
+  // Karten/Notizen des Vorkontos sichtbar und – schlimmer – die noch nicht gesyncte
+  // Outbox würde beim nächsten Login unter fremdem Token hochgeladen (Kontamination).
+  // Synchronisierte Daten gehen nicht verloren: Login pullt ab Cursor 0 alles erneut.
+  await db.transaction(
+    'rw',
+    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.outbox, db.media, db.meta],
+    async () => {
+      await Promise.all([
+        db.decks.clear(),
+        db.noteTypes.clear(),
+        db.notes.clear(),
+        db.cards.clear(),
+        db.revlog.clear(),
+        db.outbox.clear(),
+        db.media.clear(),
+      ]);
+      await db.meta.delete('auth');
+      await db.meta.delete('syncCursor'); // nächste Anmeldung startet mit vollständigem Pull
+      await db.meta.delete('lastSyncAt');
+    },
+  );
   setState({ lastSyncAt: null });
 }
 

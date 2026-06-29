@@ -5,7 +5,7 @@
 // kapseln nur den HTTP-Vertrag, damit der Upload-/Download-Pfad bereitsteht.
 
 import { db, type Media } from '../db/db';
-import { mediaUrl } from '../lib/media';
+import { mediaUrl, sha256Hex } from '../lib/media';
 
 const FLASHMEDIA_RE = /flashmedia:([a-f0-9]+)/g;
 
@@ -103,6 +103,10 @@ export async function ensureMediaForHtml(baseUrl: string, token: string, html: s
         const res = await fetch(`${baseUrl}/api/media/${hash}`, { headers: auth });
         if (!res.ok) return; // 404/503 → nichts zu tun
         const blob = await res.blob();
+        // Integritätsprüfung: gelieferte Bytes müssen zum angeforderten Hash passen,
+        // sonst nicht speichern (verhindert Vergiftung des content-addressierten Stores).
+        const actualHash = await sha256Hex(await blob.arrayBuffer());
+        if (actualHash !== hash) return;
         const mime = res.headers.get('Content-Type') ?? blob.type ?? 'image/webp';
         const { width, height } = await imageDimensions(blob);
         const media: Media = {

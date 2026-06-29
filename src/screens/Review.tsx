@@ -44,10 +44,15 @@ export default function Review() {
   // Sitzungsgröße für den Fortschrittsring: erledigt + verbleibend.
   const total = done + (queue?.length ?? 0);
 
+  // In dieser Session bereits beantwortete Karten – schützt vor Doppelbewertung und
+  // verhindert, dass ein Reload eine gerade (write-behind) beantwortete Karte zurückholt,
+  // bevor der DB-Write committet ist.
+  const answeredIds = useRef<Set<string>>(new Set());
+
   const reload = useCallback(async () => {
     if (!deckId) return;
     const q = await getStudyQueue(deckId);
-    setQueue(q);
+    setQueue(q.filter((c) => !answeredIds.current.has(c.id)));
   }, [deckId]);
 
   useEffect(() => {
@@ -59,11 +64,19 @@ export default function Review() {
   useEffect(() => {
     let lock: { release(): Promise<void> } | null = null;
     let released = false;
-    const nav = navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<{ release(): Promise<void> }> } };
+    type WakeLockSentinel = { release(): Promise<void>; addEventListener?: (t: string, cb: () => void) => void };
+    const nav = navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinel> } };
     const acquire = async () => {
       try {
         if (nav.wakeLock && document.visibilityState === 'visible') {
-          lock = await nav.wakeLock.request('screen');
+          const l = await nav.wakeLock.request('screen');
+          if (released) { void l.release().catch(() => {}); return; } // zwischenzeitlich unmounted
+          lock = l;
+          // Gibt das System den Lock frei (Akku etc.), während die Seite sichtbar ist → erneut anfordern.
+          l.addEventListener?.('release', () => {
+            lock = null;
+            if (!released && document.visibilityState === 'visible') void acquire();
+          });
         }
       } catch { /* nicht kritisch */ }
     };
@@ -112,6 +125,10 @@ export default function Review() {
   const onAnswer = useCallback(
     (grade: Grade) => {
       if (!current) return;
+      // Re-Entrancy-Schutz: dieselbe Karte nie zweimal bewerten (schneller Doppeltipp,
+      // Tasten-Autorepeat, Swipe+Klick) – sonst doppelter Revlog-Eintrag + übersprungene Folgekarte.
+      if (answeredIds.current.has(current.id)) return;
+      answeredIds.current.add(current.id);
       buzz(grade === Rating.Again ? 18 : 10);
       // Optimistisch: Schlange sofort weiterschalten, DB-Write läuft write-behind.
       void answerCard(current, grade, retention);
@@ -135,6 +152,7 @@ export default function Review() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!current) return;
+      if (e.repeat) return; // gedrückt gehaltene Taste nicht als Mehrfachbewertung werten
       if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
         e.preventDefault();
         reveal();
@@ -157,11 +175,13 @@ export default function Review() {
   // --- Swipe (Pointer) ---
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const dragging = useRef(false);
+  const dragXRef = useRef(0); // Live-Delta (zuverlässiger als der ggf. veraltete drag-State)
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!revealed || leaving) return;
     dragStart.current = { x: e.clientX, y: e.clientY };
     dragging.current = false;
+    dragXRef.current = 0;
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!dragStart.current) return;
@@ -173,11 +193,12 @@ export default function Review() {
       dragging.current = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
+    dragXRef.current = dx;
     setDrag(dx);
   };
   const endDrag = () => {
     if (!dragStart.current) return;
-    const dx = drag;
+    const dx = dragXRef.current;
     dragStart.current = null;
     if (dragging.current && Math.abs(dx) >= SWIPE_THRESHOLD) {
       const dir = dx > 0 ? 'right' : 'left';
@@ -191,7 +212,16 @@ export default function Review() {
     dragging.current = false;
   };
 
-  if (!queue) return <p className="muted">Lädt…</p>;
+  if (!queue) {
+    return (
+      <div className="review">
+        <div className="review-head">
+          <Link to="/" className="tint-text">‹ Decks</Link>
+        </div>
+        <p className="muted">Lädt…</p>
+      </div>
+    );
+  }
 
   if (!current) {
     return (

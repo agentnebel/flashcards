@@ -1,17 +1,24 @@
-import { db, type Card, type Deck, type Note, type NoteType, type RevlogEntry } from './db';
+import { db, type Card, type Deck, type Media, type Note, type NoteType, type RevlogEntry } from './db';
 import { createEmptyCard, makeScheduler } from '../scheduler/fsrs';
 import { Rating } from 'ts-fsrs';
 import type { Grade } from 'ts-fsrs';
 import { generateCards } from '../lib/cardgen';
 import { uuid } from './ids';
 
+// FSRS verlangt request_retention in (0,1]; defensiv auf einen sinnvollen Bereich klemmen,
+// damit ein korrupter/aus dem Sync stammender Wert den Scheduler nicht crasht.
+function clampRetention(v: number): number {
+  if (!Number.isFinite(v)) return 0.9;
+  return Math.min(0.97, Math.max(0.7, v));
+}
+
 export async function getDesiredRetention(): Promise<number> {
   const m = await db.meta.get('desiredRetention');
-  return typeof m?.value === 'number' ? (m.value as number) : 0.9;
+  return clampRetention(typeof m?.value === 'number' ? (m.value as number) : 0.9);
 }
 
 export async function setDesiredRetention(v: number): Promise<void> {
-  await db.meta.put({ key: 'desiredRetention', value: v });
+  await db.meta.put({ key: 'desiredRetention', value: clampRetention(v) });
 }
 
 export async function createDeck(name: string): Promise<string> {
@@ -227,15 +234,36 @@ export async function getReviewStreak(): Promise<number> {
   return streak;
 }
 
-// Lernschlange: fällige Lern-/Review-Karten zuerst, dann limitierte neue Karten.
-export async function getStudyQueue(deckId: string, newLimit = 20): Promise<Card[]> {
+// Anzahl heute (lokaler Tag) bereits eingeführter neuer Karten dieses Decks.
+// Die erste Bewertung einer neuen Karte hat im Revlog state === 0 (State.New).
+async function newCardsIntroducedToday(deckCards: Card[]): Promise<number> {
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const todays = await db.revlog.where('reviewedAt').aboveOrEqual(midnight.getTime()).toArray();
+  if (todays.length === 0) return 0;
+  const deckCardIds = new Set(deckCards.map((c) => c.id));
+  const introduced = new Set<string>();
+  for (const r of todays) {
+    if (r.state === 0 && deckCardIds.has(r.cardId)) introduced.add(r.cardId);
+  }
+  return introduced.size;
+}
+
+// Lernschlange: fällige Lern-/Review-Karten zuerst, dann neue Karten bis zum Tageslimit
+// (deck.newPerDay), abzüglich der heute bereits eingeführten neuen Karten.
+export async function getStudyQueue(deckId: string): Promise<Card[]> {
   const now = new Date();
-  const all = await db.cards.where('deckId').equals(deckId).toArray();
+  const [deck, all] = await Promise.all([
+    db.decks.get(deckId),
+    db.cards.where('deckId').equals(deckId).toArray(),
+  ]);
   const active = all.filter((c) => !c.suspended && !c.deleted);
   const due = active
     .filter((c) => c.fsrs.state !== 0 && c.due <= now)
     .sort((a, b) => a.due.getTime() - b.due.getTime());
-  const fresh = active.filter((c) => c.fsrs.state === 0).slice(0, newLimit);
+  const perDay = typeof deck?.newPerDay === 'number' ? deck.newPerDay : 20;
+  const remaining = Math.max(0, perDay - (await newCardsIntroducedToday(all)));
+  const fresh = active.filter((c) => c.fsrs.state === 0).slice(0, remaining);
   return [...due, ...fresh];
 }
 
@@ -334,6 +362,88 @@ export async function exportBackup(): Promise<string> {
     null,
     2,
   );
+}
+
+// data:-URL → Blob (Gegenstück zu blobToDataUrl, für den Backup-Import).
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
+
+interface BackupMedia {
+  hash: string;
+  mime: string;
+  width?: number;
+  height?: number;
+  dataUrl: string;
+}
+interface BackupFile {
+  decks?: Deck[];
+  noteTypes?: NoteType[];
+  notes?: Note[];
+  cards?: Card[];
+  revlog?: RevlogEntry[];
+  media?: BackupMedia[];
+}
+
+// Spiegelt ein Backup zurück in die lokale DB. JSON serialisiert Date→String, daher
+// werden alle Datumsfelder (due / fsrs.due / fsrs.last_review / revlog.due) revived.
+// Merge-Semantik: bulkPut (gleiche id überschreibt). Schreibt NICHT in die Outbox – ein
+// Restore ist lokal; zum Sync müssen die Einträge danach erneut bearbeitet werden.
+export async function importBackup(json: string): Promise<{ decks: number; notes: number; cards: number; media: number }> {
+  const data = JSON.parse(json) as BackupFile;
+  if (!data || typeof data !== 'object') throw new Error('Ungültige Backup-Datei');
+
+  const reviveCard = (c: Card): Card => {
+    const f = c.fsrs as unknown as { due: unknown; last_review?: unknown };
+    return {
+      ...c,
+      due: new Date(c.due as unknown as string),
+      fsrs: f
+        ? ({
+            ...f,
+            due: new Date(f.due as string),
+            last_review: f.last_review ? new Date(f.last_review as string) : undefined,
+          } as unknown as Card['fsrs'])
+        : c.fsrs,
+    };
+  };
+  const reviveRev = (r: RevlogEntry): RevlogEntry => ({ ...r, due: new Date(r.due as unknown as string) });
+
+  const cards = (data.cards ?? []).map(reviveCard);
+  const revlog = (data.revlog ?? []).map(reviveRev);
+
+  const media: Media[] = [];
+  for (const m of data.media ?? []) {
+    if (!m?.dataUrl || !m.hash) continue;
+    const blob = await dataUrlToBlob(m.dataUrl);
+    media.push({
+      hash: m.hash,
+      blob,
+      mime: m.mime || blob.type || 'image/webp',
+      size: blob.size,
+      width: m.width ?? 0,
+      height: m.height ?? 0,
+      createdAt: Date.now(),
+      usn: -1,
+      synced: 0,
+    });
+  }
+
+  await db.transaction(
+    'rw',
+    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.media],
+    async () => {
+      if (data.decks?.length) await db.decks.bulkPut(data.decks);
+      if (data.noteTypes?.length) await db.noteTypes.bulkPut(data.noteTypes);
+      if (data.notes?.length) await db.notes.bulkPut(data.notes);
+      if (cards.length) await db.cards.bulkPut(cards);
+      if (revlog.length) await db.revlog.bulkPut(revlog);
+      if (media.length) await db.media.bulkPut(media);
+    },
+  );
+
+  return { decks: data.decks?.length ?? 0, notes: data.notes?.length ?? 0, cards: cards.length, media: media.length };
 }
 
 export type { NoteType };

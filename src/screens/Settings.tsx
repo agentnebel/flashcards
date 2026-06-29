@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
-import { exportBackup, getDesiredRetention, setDesiredRetention } from '../db/api';
+import { exportBackup, getDesiredRetention, importBackup, setDesiredRetention } from '../db/api';
 import { db } from '../db/db';
 import {
   getSyncState,
@@ -25,6 +25,8 @@ function fmtTime(ts: number | null): string {
 
 export default function Settings() {
   const [retention, setRetention] = useState(0.9);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const auth = useLiveQuery(() => db.meta.get('auth'), [])?.value as Auth | undefined;
   const outboxCount = useLiveQuery(() => db.outbox.count(), []) ?? 0;
 
@@ -47,6 +49,21 @@ export default function Settings() {
     a.download = `flashcards-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // gleiche Datei erneut wählbar machen
+    if (!file) return;
+    if (!window.confirm('Backup einspielen? Vorhandene Karten mit gleicher ID werden überschrieben.')) return;
+    setImportMsg(null);
+    try {
+      const text = await file.text();
+      const r = await importBackup(text);
+      setImportMsg(`Importiert: ${r.decks} Decks, ${r.notes} Notizen, ${r.cards} Karten, ${r.media} Bilder.`);
+    } catch (err) {
+      setImportMsg(`Import fehlgeschlagen: ${(err as Error).message}`);
+    }
   }
 
   return (
@@ -84,8 +101,21 @@ export default function Settings() {
         <div className="group" style={{ padding: 'var(--s4)' }}>
           <div className="stack">
             <button className="block" onClick={onExport}>JSON-Backup exportieren</button>
+            <button className="block" onClick={() => importInputRef.current?.click()}>
+              JSON-Backup einspielen
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              onChange={onImportFile}
+            />
             <Link to="/import" className="btn block">Importieren (CSV/.apkg)</Link>
           </div>
+          {importMsg && (
+            <p className="info" style={{ marginTop: 'var(--s3)', marginBottom: 0 }}>{importMsg}</p>
+          )}
           <p className="info" style={{ marginTop: 'var(--s3)', marginBottom: 0 }}>
             Ausstehende, noch nicht gesyncte Änderungen: {outboxCount}
           </p>

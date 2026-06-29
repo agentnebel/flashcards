@@ -25,9 +25,33 @@ export function generateCards(note: Note, nt: NoteType): CardSpec[] {
   return nt.templates.map((_, i) => ({ templateOrd: i, clozeNum: null }));
 }
 
+// Anki-Konditionalfelder auflösen: {{#F}}…{{/F}} nur bei nicht-leerem Feld F,
+// {{^F}}…{{/F}} nur bei leerem F. Mehrere Durchläufe für verschachtelte Abschnitte.
+function applyConditionals(tmpl: string, fields: Record<string, string>): string {
+  const re = /\{\{([#^])([^{}]+)\}\}([\s\S]*?)\{\{\/\2\}\}/g;
+  let out = tmpl;
+  let prev: string;
+  do {
+    prev = out;
+    out = out.replace(re, (_all, kind: string, rawName: string, inner: string) => {
+      const filled = (fields[rawName.trim()] ?? '').trim() !== '';
+      const keep = kind === '#' ? filled : !filled;
+      return keep ? inner : '';
+    });
+  } while (out !== prev);
+  return out;
+}
+
 // Ersetzt {{Feld}}-Platzhalter; Feldnamen dürfen Unicode enthalten (z. B. "Rückseite").
+// Anki-Feldfilter wie {{type:Feld}}, {{hint:Feld}}, {{cloze:Feld}} werden auf den
+// reinen Feldwert reduziert (Teil nach dem letzten Doppelpunkt).
 function fill(tmpl: string, fields: Record<string, string>): string {
-  return tmpl.replace(/\{\{([^{}]+)\}\}/g, (_all, raw: string) => fields[raw.trim()] ?? '');
+  return applyConditionals(tmpl, fields).replace(/\{\{([^{}#^/][^{}]*)\}\}/g, (_all, raw: string) => {
+    let name = raw.trim();
+    const colon = name.lastIndexOf(':');
+    if (colon !== -1) name = name.slice(colon + 1).trim();
+    return fields[name] ?? '';
+  });
 }
 
 function clozeRender(text: string, num: number, reveal: boolean): string {

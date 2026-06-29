@@ -18,7 +18,10 @@ export async function handleMediaUpload(req: AuthedRequest, env: Env): Promise<R
   if (!env.MEDIA) return json({ error: 'R2 storage not enabled' }, { status: 503 });
 
   const mime = req.headers.get('Content-Type') || '';
-  if (!mime.startsWith('image/')) return error(415, 'Nur Bilder erlaubt (Content-Type image/*)');
+  // SVG ausschließen: kann aktives Skript enthalten (Stored-XSS, wenn direkt aufgerufen).
+  if (!mime.startsWith('image/') || mime === 'image/svg+xml') {
+    return error(415, 'Nur Rasterbilder erlaubt (kein SVG)');
+  }
 
   const buf = await req.arrayBuffer();
   if (buf.byteLength === 0) return error(400, 'Leerer Upload');
@@ -44,9 +47,13 @@ export async function handleMediaGet(req: AuthedRequest, env: Env): Promise<Resp
   if (!hash) return error(400, 'Hash fehlt');
   const obj = await env.MEDIA.get(`${req.userId}/${hash}`);
   if (!obj) return error(404, 'Nicht gefunden');
+  // Gespeicherten Content-Type nur zulassen, wenn es ein Rasterbild ist; sonst neutralisieren.
+  const stored = obj.httpMetadata?.contentType || '';
+  const ct = stored.startsWith('image/') && stored !== 'image/svg+xml' ? stored : 'application/octet-stream';
   return new Response(obj.body, {
     headers: {
-      'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+      'Content-Type': ct,
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'private, max-age=31536000, immutable',
     },
   });

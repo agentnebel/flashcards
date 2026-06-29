@@ -11,7 +11,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'icon-maskable.svg'],
       workbox: {
-        // /api/* niemals cachen — geht immer ans Netzwerk (Sync/Auth/Media)
+        // SPA-Deeplinks offline auf index.html zurückfallen lassen …
+        navigateFallback: '/index.html',
+        // … aber /api/* niemals cachen — geht immer ans Netzwerk (Sync/Auth/Media)
         navigateFallbackDenylist: [/^\/api\//],
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
       },

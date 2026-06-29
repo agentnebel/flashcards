@@ -135,16 +135,34 @@ export async function storeImage(input: Blob): Promise<string> {
 
 // ---- Object-URL-Cache & Auflösung ----
 
+// Begrenzter LRU-Cache: ohne Obergrenze würde jede je gerenderte Object-URL den Blob
+// für die gesamte Seitenlebensdauer im Speicher halten (Leak bei langen Review-Sessions).
+const URL_CACHE_MAX = 120;
 const urlCache = new Map<string, string>();
+
+function cacheTouch(hash: string, url: string): void {
+  urlCache.delete(hash);
+  urlCache.set(hash, url); // ans Ende (jüngste Nutzung)
+  while (urlCache.size > URL_CACHE_MAX) {
+    const oldest = urlCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    const stale = urlCache.get(oldest);
+    urlCache.delete(oldest);
+    if (stale) URL.revokeObjectURL(stale); // bereits gerenderte <img> bleiben sichtbar; nur neue Loads betroffen
+  }
+}
 
 /** Liefert eine (gecachte) Object-URL für den Blob zum Hash, oder null wenn nicht lokal vorhanden. */
 export async function mediaUrl(hash: string): Promise<string | null> {
   const cached = urlCache.get(hash);
-  if (cached) return cached;
+  if (cached) {
+    cacheTouch(hash, cached);
+    return cached;
+  }
   const media = await db.media.get(hash);
   if (!media) return null;
   const url = URL.createObjectURL(media.blob);
-  urlCache.set(hash, url);
+  cacheTouch(hash, url);
   return url;
 }
 
