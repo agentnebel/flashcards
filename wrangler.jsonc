@@ -23,11 +23,10 @@
     }
   ]
 
-  // R2 für Medien (M3): erst im Cloudflare-Dashboard R2 aktivieren, dann
-  // `wrangler r2 bucket create flashcards-media` und folgenden Block einkommentieren:
-  // "r2_buckets": [
-  //   { "binding": "MEDIA", "bucket_name": "flashcards-media" }
-  // ]
+  // R2 für Medien: aktiviert 28.06.2026
+  ,"r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "flashcards-media" }
+  ]
 
   // Secret: `wrangler secret put JWT_SECRET`
 }
