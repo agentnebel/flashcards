@@ -113,24 +113,61 @@ export async function updateNote(
   noteId: string,
   fields: Record<string, string>,
   newDeckId?: string,
+  newNoteTypeId?: string,
 ): Promise<void> {
   const note = await db.notes.get(noteId);
   if (!note) return;
-  const nt = await db.noteTypes.get(note.noteTypeId);
+  const resolvedNoteTypeId = newNoteTypeId ?? note.noteTypeId;
+  const nt = await db.noteTypes.get(resolvedNoteTypeId);
   if (!nt) return;
   const now = Date.now();
   const deckId = newDeckId ?? note.deckId;
-  const updated: Note = { ...note, fields, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now, usn: -1 };
-  const noteCards = await db.cards.where('noteId').equals(noteId).toArray();
-  const updatedCards = noteCards.map((c) => ({ ...c, deckId, updatedAt: now, usn: -1 as const }));
-  await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
-    await db.notes.put(updated);
-    await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
-    for (const c of updatedCards) {
-      await db.cards.put(c);
-      await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
-    }
-  });
+  const updated: Note = { ...note, fields, noteTypeId: resolvedNoteTypeId, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now, usn: -1 };
+  const existingCards = await db.cards.where('noteId').equals(noteId).toArray();
+
+  if (resolvedNoteTypeId !== note.noteTypeId) {
+    // Notiztyp gewechselt: alte Karten löschen + neue nach neuem Template generieren.
+    // FSRS-Fortschritt der alten Karten geht verloren (analog zu Anki).
+    const newCards: Card[] = generateCards(updated, nt).map((s) => {
+      const fsrs = createEmptyCard(new Date());
+      return {
+        id: uuid(),
+        noteId,
+        deckId,
+        noteTypeId: nt.id,
+        templateOrd: s.templateOrd,
+        clozeNum: s.clozeNum,
+        fsrs,
+        due: fsrs.due,
+        suspended: 0,
+        updatedAt: now,
+        usn: -1 as const,
+      };
+    });
+    await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+      await db.notes.put(updated);
+      await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
+      await db.cards.where('noteId').equals(noteId).delete();
+      for (const c of existingCards) {
+        await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
+      }
+      await db.cards.bulkAdd(newCards);
+      for (const c of newCards) {
+        await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
+      }
+    });
+  } else {
+    // Gleichbleibender Notiztyp: Felder + Deck auf bestehenden Karten aktualisieren.
+    const updatedCards = existingCards.map((c) => ({ ...c, deckId, updatedAt: now, usn: -1 as const }));
+    await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+      await db.notes.put(updated);
+      await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
+      for (const c of updatedCards) {
+        await db.cards.put(c);
+        await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
+      }
+    });
+  }
 }
 
 export async function deleteNote(noteId: string): Promise<void> {

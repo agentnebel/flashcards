@@ -159,7 +159,7 @@ export default function AddCard() {
   async function onSave() {
     if (!nt || !deckId) return;
     if (isEdit && noteId) {
-      await updateNote(noteId, fields, deckId);
+      await updateNote(noteId, fields, deckId, noteTypeId);
       setSaved(true);
       setTimeout(() => { setSaved(false); navigate('/browse'); }, 1000);
     } else {
