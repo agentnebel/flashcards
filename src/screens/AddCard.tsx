@@ -17,6 +17,9 @@ function mediaHashesIn(text: string): string[] {
   return out;
 }
 
+// Größtes akzeptiertes Eingabebild (vor Kompression) — schützt v. a. Mobile vor OOM beim Dekodieren.
+const MAX_IMAGE_INPUT_BYTES = 25 * 1024 * 1024;
+
 // Entfernt das <img>-Tag eines bestimmten Hashes aus dem Feldtext (Blob bleibt erhalten).
 function removeMediaTag(text: string, hash: string): string {
   const safe = hash.replace(/[^a-f0-9]/gi, ''); // Hash ist Hex; defensiv säubern fürs RegExp
@@ -91,6 +94,10 @@ export default function AddCard() {
 
   // Komprimiert + speichert ein Bild und fügt das flashmedia-Tag ein.
   async function addImageToField(field: string, file: Blob) {
+    if (file.size > MAX_IMAGE_INPUT_BYTES) {
+      alert('Bild ist zu groß (max. 25 MB).');
+      return;
+    }
     setBusyField(field);
     try {
       const hash = await storeImage(file);
@@ -125,15 +132,22 @@ export default function AddCard() {
   }
 
   function onDrop(field: string, e: DragEvent<HTMLTextAreaElement>) {
-    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith('image/'));
-    if (files.length === 0) return;
+    const dropped = Array.from(e.dataTransfer?.files ?? []);
+    if (dropped.length === 0) return;
     e.preventDefault();
+    const files = dropped.filter((f) => f.type.startsWith('image/'));
+    if (files.length === 0) {
+      alert('Nur Bilddateien werden unterstützt.');
+      return;
+    }
     rememberCaret(field);
     for (const f of files) void addImageToField(field, f);
   }
 
   function onFileChange(field: string, e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []).filter((f) => f.type.startsWith('image/'));
+    const picked = Array.from(e.target.files ?? []);
+    const files = picked.filter((f) => f.type.startsWith('image/'));
+    if (picked.length > 0 && files.length === 0) alert('Nur Bilddateien werden unterstützt.');
     for (const f of files) void addImageToField(field, f);
     e.target.value = ''; // gleiche Datei erneut wählbar machen
   }

@@ -32,35 +32,40 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
     if (!ALLOWED_ENTITIES.has(m.entity)) continue;
     // Revlog ist append-only: Löschungen werden nicht über den Sync propagiert.
     if (m.entity === 'revlog' && m.op === 'delete') continue;
+    const isDelete = m.op === 'delete';
+    const payloadObj = !isDelete && m.payload && typeof m.payload === 'object' ? (m.payload as Record<string, unknown>) : null;
     // Upsert-Payload muss zur entityId passen (Clients indexieren lokal auf payload.id;
     // eine Abweichung würde LWW-/Dedup-Prüfungen auf anderen Geräten umgehen).
-    if (m.op === 'upsert' && m.payload && typeof m.payload === 'object') {
-      const pid = (m.payload as { id?: unknown }).id;
-      if (typeof pid === 'string' && pid !== m.entityId) continue;
-    }
-    const seqRow = await env.DB.prepare(
-      'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',
-    )
-      .bind(req.userId, m.entity, m.entityId, m.op, now)
-      .first<{ seq: number }>();
-    const seq = seqRow?.seq ?? 0;
-    cursor = Math.max(cursor, seq);
-    await env.DB.prepare(
-      `INSERT INTO sync_objects (user_id, entity, entity_id, payload, deleted, seq, updated_at)
-       VALUES (?,?,?,?,?,?,?)
-       ON CONFLICT(user_id, entity, entity_id) DO UPDATE SET
-         payload=excluded.payload, deleted=excluded.deleted, seq=excluded.seq, updated_at=excluded.updated_at`,
-    )
-      .bind(
+    if (payloadObj && typeof payloadObj.id === 'string' && payloadObj.id !== m.entityId) continue;
+    // Konfliktauflösung serverautoritativ per Inhalts-updatedAt (statt reiner Ankunftsreihenfolge).
+    const clientUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : now;
+
+    // Atomar: change_log + sync_objects in EINEM D1-Batch (eine Transaktion). Verhindert,
+    // dass eine seq im change_log ohne passenden sync_objects-Stand zurückbleibt (Datenverlust
+    // für andere Geräte). seq wird via last_insert_rowid() aus dem change_log-Insert übernommen.
+    const res = await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',
+      ).bind(req.userId, m.entity, m.entityId, m.op, now),
+      env.DB.prepare(
+        `INSERT INTO sync_objects (user_id, entity, entity_id, payload, deleted, seq, updated_at)
+         VALUES (?,?,?,?,?, last_insert_rowid(), ?)
+         ON CONFLICT(user_id, entity, entity_id) DO UPDATE SET
+           payload    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.payload ELSE sync_objects.payload END,
+           deleted    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.deleted ELSE sync_objects.deleted END,
+           updated_at = MAX(excluded.updated_at, sync_objects.updated_at),
+           seq        = excluded.seq`, // seq immer hochzählen → gewinnende Version propagiert an alle Geräte
+      ).bind(
         req.userId,
         m.entity,
         m.entityId,
-        m.op === 'delete' ? null : JSON.stringify(m.payload ?? null),
-        m.op === 'delete' ? 1 : 0,
-        seq,
-        now,
-      )
-      .run();
+        isDelete ? null : JSON.stringify(m.payload ?? null),
+        isDelete ? 1 : 0,
+        clientUpdatedAt,
+      ),
+    ]);
+    const seq = (res[0]?.results?.[0] as { seq?: number } | undefined)?.seq ?? 0;
+    cursor = Math.max(cursor, seq);
   }
 
   return json({ cursor, applied: mutations.length });

@@ -77,24 +77,40 @@ Unit-Tests der reinen Funktionen gegen den echten Quellcode (dynamischer Import 
 
 ---
 
-## Bewusst zurückgestellt (mit Begründung)
+## Backlog — inzwischen vollständig abgearbeitet (Folge-Pass 29.06.)
+
+- **Server-autoritatives LWW (B#5):** Konfliktauflösung jetzt per Inhalts-`updatedAt`
+  (statt reiner Ankunftsreihenfolge); die Seq wird dabei IMMER hochgezählt, damit die
+  gewinnende Version an alle Geräte propagiert (kein Hängenbleiben durch globale Seq).
+  Lokal gegen D1 verifiziert (älter verliert + Seq steigt, neuer gewinnt).
+- **`handlePush`-Atomarität (B#2):** change_log + sync_objects laufen jetzt in EINEM
+  D1-`batch()` (eine Transaktion); seq via `last_insert_rowid()`. Verifiziert:
+  `change_log.seq == sync_objects.seq`.
+- **Sub-Deck-Traversierung (A#7):** `getStudyQueue` schließt Karten aller Unterdecks ein
+  (parentId-Adjazenz). Verifiziert.
+- **Verwaiste Medien-GC (D#5):** `gcOrphanedMedia()` nach Lösch-Operationen; geteilte Bilder
+  bleiben erhalten. Verifiziert.
+- **`exists` R2-Präsenz (D#8):** prüft echte R2-Bytes (head) statt bloßer D1-Zeile; ohne R2
+  wird nichts als vorhanden gemeldet. Verifiziert.
+- **Bild-Handling (D#6):** 25-MB-Eingabe-Cap, Rückmeldung bei Nicht-Bild-Dateien, animierte
+  GIFs werden unverändert gespeichert (nicht flachgerendert).
+- **Fuzz-konsistente Vorschau (A#5):** FSRS-Plan wird pro Karte EINMAL berechnet
+  (`scheduleCard`) und für Anzeige UND Speichern (`commitReview`) verwendet — Button-Intervall
+  = gespeichertes Intervall.
+- **Stille Pull-Trunkierung (B#11):** wirft jetzt einen sichtbaren Fehler statt unbemerkt abzubrechen.
+- **fmtInterval-Politur (A#9):** „fällig" für überfällige, saubere 24h-Grenze.
+- **Toter Code (A#8):** ungenutzte `deckCounts`/`QueueCounts` entfernt.
+- **Textauswahl vs. Swipe (E#6):** `user-select:none` während des Wischens.
+- **Backup-Import-Outbox:** wiederhergestellte Daten werden in die Outbox eingereiht und
+  synchronisieren nun (vorherige Einschränkung behoben). Verifiziert (Delta = Anzahl Objekte).
+
+## Bewusst NICHT umgesetzt (mit Begründung)
 
 - **Push-Cursor übernehmen (Tester B#3): ABGELEHNT.** Der Vorschlag, den Client-Cursor auf
   die vom Push zurückgegebenen Seqs vorzuziehen, würde Datenverlust verursachen: `change_log.seq`
   ist ein **global-monotoner** Zähler über alle Geräte *eines* Accounts; ein zweites Gerät,
   das zwischen erstem Pull und Push schreibt, bekäme niedrigere Seqs, die durch das Vorziehen
   übersprungen würden. Der „redundante" zweite Pull ist die korrekte, sichere Variante.
-- **Server-autoritatives LWW / Clock-Skew (B#5)** — größerer Umbau (Server-Ordering statt
-  Client-`updatedAt`); separat planen.
-- **`handlePush`-Atomarität via D1-Batch (B#2)** — sinnvoll, aber Umbau wegen `RETURNING seq`;
-  separat.
-- **Sub-Deck-Traversierung (A#7)** — `parentId` ist aktuell immer `null`; latent.
-- **Verwaiste Medien-GC (D#5)**, **`exists` D1-vs-R2-Mismatch (D#8)**, **Client-Bildgrößen-Cap /
-  animierte GIFs (D#6)**, **Fuzz-Seed-Differenz Vorschau↔Speichern (A#5)**, **stille Pull-Trunkierung
-  bei >1000 Seiten (B#11)** — Backlog, niedrige Priorität.
-
-**Bekannte Einschränkung des Backup-Imports:** stellt lokal wieder her, schreibt aber nicht in
-die Outbox — wiederhergestellte Daten synchronisieren erst nach erneuter Bearbeitung.
 
 ---
 

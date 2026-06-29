@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Rating } from 'ts-fsrs';
-import type { Grade } from 'ts-fsrs';
+import type { Grade, RecordLog } from 'ts-fsrs';
 import { db, type Card } from '../db/db';
 import {
-  answerCard,
+  commitReview,
   getDesiredRetention,
   getStudyQueue,
-  previewDueDates,
+  scheduleCard,
 } from '../db/api';
 import { renderCard } from '../lib/cardgen';
 import { resolveMediaHtml } from '../lib/media';
@@ -33,7 +33,6 @@ export default function Review() {
   const { deckId } = useParams<{ deckId: string }>();
   const [queue, setQueue] = useState<Card[] | null>(null);
   const [rendered, setRendered] = useState<{ front: string; back: string } | null>(null);
-  const [previews, setPreviews] = useState<Record<number, Date>>({});
   const [revealed, setRevealed] = useState(false);
   const [retention, setRetention] = useState(0.9);
   const [done, setDone] = useState(0);
@@ -41,6 +40,12 @@ export default function Review() {
   const [leaving, setLeaving] = useState<'left' | 'right' | null>(null);
 
   const current = queue?.[0] ?? null;
+
+  // FSRS-Plan EINMAL pro Karte berechnen (gleiches `now` für Vorschau und späteres Speichern).
+  const schedule = useMemo<RecordLog | null>(
+    () => (current ? scheduleCard(current, retention) : null),
+    [current, retention],
+  );
   // Sitzungsgröße für den Fortschrittsring: erledigt + verbleibend.
   const total = done + (queue?.length ?? 0);
 
@@ -103,7 +108,7 @@ export default function Review() {
     return { front, back };
   }, []);
 
-  // Aktuelle Karte rendern + Intervallvorschau; nächste Karte vorab laden.
+  // Aktuelle Karte rendern; nächste Karte vorab laden.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -111,7 +116,6 @@ export default function Review() {
       const r = await renderFor(current);
       if (!alive || !r) return;
       setRendered(r);
-      setPreviews(previewDueDates(current, retention));
       setRevealed(false);
       setDrag(0);
       setLeaving(null);
@@ -120,22 +124,22 @@ export default function Review() {
       if (next) void renderFor(next);
     })();
     return () => { alive = false; };
-  }, [current, retention, renderFor, queue]);
+  }, [current, renderFor, queue]);
 
   const onAnswer = useCallback(
     (grade: Grade) => {
-      if (!current) return;
+      if (!current || !schedule) return;
       // Re-Entrancy-Schutz: dieselbe Karte nie zweimal bewerten (schneller Doppeltipp,
       // Tasten-Autorepeat, Swipe+Klick) – sonst doppelter Revlog-Eintrag + übersprungene Folgekarte.
       if (answeredIds.current.has(current.id)) return;
       answeredIds.current.add(current.id);
       buzz(grade === Rating.Again ? 18 : 10);
-      // Optimistisch: Schlange sofort weiterschalten, DB-Write läuft write-behind.
-      void answerCard(current, grade, retention);
+      // Optimistisch: Schlange sofort weiterschalten, DB-Write (vorab berechneter Plan) läuft write-behind.
+      void commitReview(current, schedule[grade]);
       setDone((n) => n + 1);
       setQueue((q) => (q ?? []).slice(1));
     },
-    [current, retention],
+    [current, schedule],
   );
 
   // Wenn die Schlange leer wird: ggf. neu fällige Lernkarten nachladen.
@@ -239,6 +243,7 @@ export default function Review() {
         transform: `translateX(${drag}px) rotate(${drag * 0.04}deg)`,
         transition: dragStart.current ? 'none' : 'transform .18s var(--ease)',
         opacity: leaving ? 0 : 1,
+        userSelect: 'none', // während des Wischens keine Textauswahl (Geste vs. Selektion)
       }
     : {};
 
@@ -280,7 +285,7 @@ export default function Review() {
           {GRADES.map(({ grade, label, cls }) => (
             <button key={grade} className={cls} onClick={() => onAnswer(grade)}>
               <span className="glabel">{label}</span>
-              <span className="givl">{previews[grade] ? fmtInterval(previews[grade]) : ''}</span>
+              <span className="givl">{schedule ? fmtInterval(schedule[grade].card.due) : ''}</span>
             </button>
           ))}
         </div>

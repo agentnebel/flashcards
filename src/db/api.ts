@@ -1,7 +1,6 @@
-import { db, type Card, type Deck, type Media, type Note, type NoteType, type RevlogEntry } from './db';
+import { db, type Card, type Deck, type Media, type Note, type NoteType, type OutboxItem, type RevlogEntry } from './db';
 import { createEmptyCard, makeScheduler } from '../scheduler/fsrs';
-import { Rating } from 'ts-fsrs';
-import type { Grade } from 'ts-fsrs';
+import type { RecordLog, RecordLogItem } from 'ts-fsrs';
 import { generateCards } from '../lib/cardgen';
 import { uuid } from './ids';
 
@@ -107,6 +106,7 @@ export async function deleteDeck(deckId: string): Promise<void> {
       await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
     }
   });
+  await gcOrphanedMedia(); // jetzt unreferenzierte Bilder lokal entfernen
 }
 
 export async function updateNote(
@@ -144,6 +144,7 @@ export async function deleteNote(noteId: string): Promise<void> {
       await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
     }
   });
+  await gcOrphanedMedia(); // jetzt unreferenzierte Bilder lokal entfernen
 }
 
 // Massenimport (CSV/TSV): erzeugt Notizen + Karten + Outbox-Einträge in Batches.
@@ -249,14 +250,36 @@ async function newCardsIntroducedToday(deckCards: Card[]): Promise<number> {
   return introduced.size;
 }
 
+// Deck-IDs eines Decks inkl. aller Unterdecks (parentId-Adjazenz). So schließt Lernen/Zählen
+// eines Eltern-Decks die Karten der Kinder ein, statt sie stillschweigend zu überspringen.
+async function descendantDeckIds(deckId: string): Promise<string[]> {
+  const all = await db.decks.toArray();
+  const childrenByParent = new Map<string, string[]>();
+  for (const d of all) {
+    if (d.parentId) {
+      const arr = childrenByParent.get(d.parentId);
+      if (arr) arr.push(d.id);
+      else childrenByParent.set(d.parentId, [d.id]);
+    }
+  }
+  const out = [deckId];
+  const stack = [deckId];
+  while (stack.length) {
+    const cur = stack.pop() as string;
+    for (const child of childrenByParent.get(cur) ?? []) {
+      out.push(child);
+      stack.push(child);
+    }
+  }
+  return out;
+}
+
 // Lernschlange: fällige Lern-/Review-Karten zuerst, dann neue Karten bis zum Tageslimit
-// (deck.newPerDay), abzüglich der heute bereits eingeführten neuen Karten.
+// (deck.newPerDay), abzüglich der heute bereits eingeführten neuen Karten. Inkl. Unterdecks.
 export async function getStudyQueue(deckId: string): Promise<Card[]> {
   const now = new Date();
-  const [deck, all] = await Promise.all([
-    db.decks.get(deckId),
-    db.cards.where('deckId').equals(deckId).toArray(),
-  ]);
+  const [deck, deckIds] = await Promise.all([db.decks.get(deckId), descendantDeckIds(deckId)]);
+  const all = (await Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray()))).flat();
   const active = all.filter((c) => !c.suspended && !c.deleted);
   const due = active
     .filter((c) => c.fsrs.state !== 0 && c.due <= now)
@@ -267,42 +290,23 @@ export async function getStudyQueue(deckId: string): Promise<Card[]> {
   return [...due, ...fresh];
 }
 
-export interface QueueCounts {
-  due: number;
-  fresh: number;
+// Vollständige FSRS-Vorschau für alle vier Bewertungen, EINMAL berechnet (gleiches `now`).
+// So entspricht das auf dem Button gezeigte Intervall exakt dem später gespeicherten (vorher
+// liefen Vorschau via repeat() und Speichern via next() mit unterschiedlichem now → Fuzz-Drift).
+export function scheduleCard(card: Card, retention: number, now: Date = new Date()): RecordLog {
+  return makeScheduler(retention).repeat(card.fsrs, now);
 }
 
-export async function deckCounts(deckId: string): Promise<QueueCounts> {
-  const now = new Date();
-  const all = await db.cards.where('deckId').equals(deckId).toArray();
-  const active = all.filter((c) => !c.suspended && !c.deleted);
-  return {
-    due: active.filter((c) => c.fsrs.state !== 0 && c.due <= now).length,
-    fresh: active.filter((c) => c.fsrs.state === 0).length,
-  };
-}
-
-// Vorschau der nächsten Fälligkeit je Bewertung (für die Antwort-Buttons).
-export function previewDueDates(card: Card, retention: number): Record<number, Date> {
-  const f = makeScheduler(retention);
-  const rec = f.repeat(card.fsrs, new Date());
-  return {
-    [Rating.Again]: rec[Rating.Again].card.due,
-    [Rating.Hard]: rec[Rating.Hard].card.due,
-    [Rating.Good]: rec[Rating.Good].card.due,
-    [Rating.Easy]: rec[Rating.Easy].card.due,
-  };
-}
-
-export async function answerCard(card: Card, rating: Grade, retention: number): Promise<void> {
-  const f = makeScheduler(retention);
-  const now = new Date();
-  const { card: next, log } = f.next(card.fsrs, now, rating);
-  const updated: Card = { ...card, fsrs: next, due: next.due, updatedAt: now.getTime(), usn: -1 };
+// Persistiert ein zuvor mit scheduleCard berechnetes Ergebnis (write-behind aus dem Review).
+export async function commitReview(card: Card, item: RecordLogItem): Promise<void> {
+  const next = item.card;
+  const log = item.log;
+  const reviewedAt = log.review instanceof Date ? log.review.getTime() : Date.now();
+  const updated: Card = { ...card, fsrs: next, due: next.due, updatedAt: reviewedAt, usn: -1 };
   const rev: RevlogEntry = {
     id: uuid(),
     cardId: card.id,
-    rating,
+    rating: log.rating,
     state: log.state,
     due: log.due,
     stability: log.stability,
@@ -310,13 +314,13 @@ export async function answerCard(card: Card, rating: Grade, retention: number): 
     elapsedDays: log.elapsed_days,
     lastElapsedDays: log.last_elapsed_days,
     scheduledDays: log.scheduled_days,
-    reviewedAt: now.getTime(),
+    reviewedAt,
   };
   await db.transaction('rw', db.cards, db.revlog, db.outbox, async () => {
     await db.cards.put(updated);
     await db.revlog.add(rev);
-    await db.outbox.add({ op: 'upsert', entity: 'card', entityId: card.id, payload: updated, createdAt: now.getTime() });
-    await db.outbox.add({ op: 'upsert', entity: 'revlog', entityId: rev.id, payload: rev, createdAt: now.getTime() });
+    await db.outbox.add({ op: 'upsert', entity: 'card', entityId: card.id, payload: updated, createdAt: reviewedAt });
+    await db.outbox.add({ op: 'upsert', entity: 'revlog', entityId: rev.id, payload: rev, createdAt: reviewedAt });
   });
 }
 
@@ -326,6 +330,26 @@ export async function setSuspended(cardId: string, suspended: 0 | 1): Promise<vo
   const updated = { ...card, suspended, updatedAt: Date.now(), usn: -1 };
   await db.cards.put(updated);
   await db.outbox.add({ op: 'upsert', entity: 'card', entityId: cardId, payload: updated, createdAt: Date.now() });
+}
+
+// Verwaiste Medien aufräumen: lokale Blobs löschen, die in keinem Notizfeld mehr referenziert
+// werden. Geteilte Bilder (in mehreren Notizen) bleiben erhalten. Wird nach Lösch-Operationen
+// aufgerufen, damit der IndexedDB-Speicher nicht unbegrenzt wächst.
+const FLASHMEDIA_REF_RE = /flashmedia:([a-f0-9]+)/g;
+export async function gcOrphanedMedia(): Promise<number> {
+  const [notes, hashes] = await Promise.all([
+    db.notes.toArray(),
+    db.media.orderBy('hash').keys() as Promise<string[]>,
+  ]);
+  const referenced = new Set<string>();
+  for (const n of notes) {
+    for (const v of Object.values(n.fields ?? {})) {
+      for (const m of String(v).matchAll(FLASHMEDIA_REF_RE)) referenced.add(m[1]);
+    }
+  }
+  const orphans = hashes.filter((h) => !referenced.has(h));
+  if (orphans.length) await db.media.bulkDelete(orphans);
+  return orphans.length;
 }
 
 // Blob → base64 data URL (für vollständige, eigenständige Backups).
@@ -432,13 +456,20 @@ export async function importBackup(json: string): Promise<{ decks: number; notes
 
   await db.transaction(
     'rw',
-    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.media],
+    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.media, db.outbox],
     async () => {
-      if (data.decks?.length) await db.decks.bulkPut(data.decks);
-      if (data.noteTypes?.length) await db.noteTypes.bulkPut(data.noteTypes);
-      if (data.notes?.length) await db.notes.bulkPut(data.notes);
-      if (cards.length) await db.cards.bulkPut(cards);
-      if (revlog.length) await db.revlog.bulkPut(revlog);
+      const at = Date.now();
+      const enqueue = async (entity: OutboxItem['entity'], rows: { id: string }[]) => {
+        for (const r of rows) {
+          await db.outbox.add({ op: 'upsert', entity, entityId: r.id, payload: r, createdAt: at });
+        }
+      };
+      if (data.decks?.length) { await db.decks.bulkPut(data.decks); await enqueue('deck', data.decks); }
+      if (data.noteTypes?.length) { await db.noteTypes.bulkPut(data.noteTypes); await enqueue('noteType', data.noteTypes); }
+      if (data.notes?.length) { await db.notes.bulkPut(data.notes); await enqueue('note', data.notes); }
+      if (cards.length) { await db.cards.bulkPut(cards); await enqueue('card', cards); }
+      if (revlog.length) { await db.revlog.bulkPut(revlog); await enqueue('revlog', revlog); }
+      // Medien: synced:0 → der reguläre Medien-Sync lädt sie beim nächsten Lauf hoch.
       if (media.length) await db.media.bulkPut(media);
     },
   );

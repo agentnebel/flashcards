@@ -110,8 +110,22 @@ export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
  * in db.media ab. Schreibt NICHT in die normale Outbox – Medien-Sync läuft separat.
  * Gibt den Hash zurück (für das <img src="flashmedia:HASH">-Tag).
  */
+const MAX_GIF_BYTES = 8 * 1024 * 1024; // kleine GIFs unverändert behalten
+
 export async function storeImage(input: Blob): Promise<string> {
-  const { blob, mime, width, height } = await compressImage(input);
+  let blob: Blob;
+  let mime: string;
+  let width: number;
+  let height: number;
+  // Animierte GIFs NICHT über Canvas neu rendern (würde sie auf den ersten Frame plätten).
+  // Kleine GIFs unverändert speichern; größere fallen auf die normale Kompression zurück.
+  if (input.type === 'image/gif' && input.size <= MAX_GIF_BYTES) {
+    blob = input;
+    mime = 'image/gif';
+    ({ width, height } = await blobDimensions(input));
+  } else {
+    ({ blob, mime, width, height } = await compressImage(input));
+  }
   const buf = await blob.arrayBuffer();
   const hash = await sha256Hex(buf);
 
@@ -131,6 +145,20 @@ export async function storeImage(input: Blob): Promise<string> {
     await db.media.add(media);
   }
   return hash;
+}
+
+async function blobDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const b = await createImageBitmap(blob);
+      const d = { width: b.width, height: b.height };
+      b.close();
+      return d;
+    } catch {
+      /* ignore */
+    }
+  }
+  return { width: 0, height: 0 };
 }
 
 // ---- Object-URL-Cache & Auflösung ----

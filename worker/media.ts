@@ -59,27 +59,22 @@ export async function handleMediaGet(req: AuthedRequest, env: Env): Promise<Resp
   });
 }
 
-// Client-Vorabprüfung: welche Hashes liegen serverseitig bereits vor?
-// Spart redundante Uploads. Funktioniert auch ohne R2 (rein D1-basiert).
+// Client-Vorabprüfung: welche Hashes liegen serverseitig WIRKLICH vor (Bytes in R2)?
+// Spart redundante Uploads. Wichtig: nicht die bloße D1-Zeile als "vorhanden" werten — eine
+// Metazeile ohne zugehöriges R2-Objekt würde den Client fälschlich als synced markieren,
+// und das Bild käme nie auf andere Geräte. Ohne R2 wird nichts als vorhanden gemeldet.
 export async function handleMediaExists(req: AuthedRequest, env: Env): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as { hashes?: unknown };
   const hashes = Array.isArray(body.hashes) ? body.hashes.filter((h): h is string => typeof h === 'string') : [];
   if (hashes.length > MAX_EXISTS_HASHES) return error(413, `Zu viele Hashes (max ${MAX_EXISTS_HASHES})`);
 
-  // Eindeutige, nicht-leere Hashes für die Abfrage.
-  const unique = [...new Set(hashes.filter((h) => h.length > 0))];
-  if (unique.length === 0) return json({ have: [], missing: [] });
+  // Eindeutige, nicht-leere, plausibel geformte Hashes (Hex).
+  const unique = [...new Set(hashes.filter((h) => /^[a-f0-9]{64}$/.test(h)))];
+  if (unique.length === 0 || !env.MEDIA) return json({ have: [], missing: unique });
 
-  const placeholders = unique.map(() => '?').join(',');
-  const res = await env.DB.prepare(
-    `SELECT sha256 FROM media WHERE user_id = ? AND sha256 IN (${placeholders})`,
-  )
-    .bind(req.userId, ...unique)
-    .all<{ sha256: string }>();
-
-  const haveSet = new Set(res.results.map((r) => r.sha256));
-  const have = unique.filter((h) => haveSet.has(h));
-  const missing = unique.filter((h) => !haveSet.has(h));
+  const heads = await Promise.all(unique.map((h) => env.MEDIA!.head(`${req.userId}/${h}`)));
+  const have = unique.filter((_, i) => heads[i] !== null);
+  const missing = unique.filter((_, i) => heads[i] === null);
 
   return json({ have, missing });
 }

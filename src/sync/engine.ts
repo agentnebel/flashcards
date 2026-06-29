@@ -185,7 +185,7 @@ async function applyChange(ch: PullChange, touchedHtml: string[]): Promise<void>
 
 async function pullAll(token: string, touchedHtml: string[]): Promise<void> {
   let cursor = await getCursor();
-  for (let guard = 0; guard < 1000; guard++) {
+  for (let guard = 0; guard < 5000; guard++) {
     const res = await apiPost('/api/sync/pull', { cursor }, token);
     if (res.status === 401) throw new AuthError();
     if (!res.ok) throw new Error(`Pull fehlgeschlagen (${res.status})`);
@@ -193,8 +193,11 @@ async function pullAll(token: string, touchedHtml: string[]): Promise<void> {
     for (const ch of data.changes) await applyChange(ch, touchedHtml);
     cursor = data.cursor;
     await setCursor(cursor);
-    if (!data.hasMore) break;
+    if (!data.hasMore) return;
   }
+  // Schutzgrenze erreicht, obwohl der Server noch mehr Änderungen hat → Fehler sichtbar machen,
+  // statt das Gerät stillschweigend unvollständig zu lassen.
+  throw new Error('Sync unvollständig (zu viele Änderungen). Bitte erneut synchronisieren.');
 }
 
 async function pushOutbox(token: string): Promise<void> {
