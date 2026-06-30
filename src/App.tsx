@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import DeckList from './screens/DeckList';
 import Review from './screens/Review';
@@ -6,7 +7,19 @@ import AddCard from './screens/AddCard';
 import Browse from './screens/Browse';
 import Settings from './screens/Settings';
 import Import from './screens/Import';
+import { db } from './db/db';
+import { useOnlineStatus } from './lib/useOnlineStatus';
 import { getAuth, getSyncState, loadLastSyncAt, subscribeSync, sync } from './sync/engine';
+
+function IconOffline() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12.5a7 7 0 0 1 11-1.5M8.5 16a4 4 0 0 1 5 -.6" />
+      <path d="M12 20h.01" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
 
 function IconDecks() {
   return (
@@ -43,6 +56,10 @@ function IconSettings() {
 
 export default function App() {
   const syncState = useSyncExternalStore(subscribeSync, getSyncState);
+  const online = useOnlineStatus();
+  // Anzahl noch nicht synchronisierter lokaler Änderungen (Outbox). Live, damit das
+  // Offline-Badge mitzählt, während offline weiter gelernt/bearbeitet wird.
+  const pending = useLiveQuery(() => db.outbox.count(), [], 0);
   const location = useLocation();
 
   // Während des Lernens (Review) auf Mobile die Tableiste ausblenden (Fokus).
@@ -74,7 +91,19 @@ export default function App() {
     <div className={`app${isReview ? ' focus-mode' : ''}`}>
       <header className="topbar">
         <span className="sync-ind" aria-live="polite">
-          {syncState.syncing ? (
+          {!online ? (
+            <span
+              className="offline-badge"
+              title={
+                pending && pending > 0
+                  ? `Offline – ${pending} Änderung${pending === 1 ? '' : 'en'} werden bei Verbindung synchronisiert`
+                  : 'Offline – alle Daten sind lokal verfügbar'
+              }
+            >
+              <IconOffline />
+              <span>Offline{pending && pending > 0 ? ` · ${pending}` : ''}</span>
+            </span>
+          ) : syncState.syncing ? (
             <>
               <span className="spinner" aria-hidden="true" />
               <span className="visually-hidden">Synchronisiere</span>

@@ -15,7 +15,14 @@ export default defineConfig({
         navigateFallback: '/index.html',
         // … aber /api/* niemals cachen — geht immer ans Netzwerk (Sync/Auth/Media)
         navigateFallbackDenylist: [/^\/api\//],
-        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // .wasm einschließen: sql.js (~660 KB) wird für den .apkg-Import gebraucht und muss
+        // offline verfügbar sein. Ohne dieses Muster bricht der Import ohne Netz ab.
+        globPatterns: ['**/*.{js,css,html,svg,wasm,woff2,png,ico,json,webmanifest}'],
+        // Standardgrenze (2 MiB) anheben, damit die WASM-Datei sicher mit-precacht wird.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // Alte Workbox-Caches früherer Versionen beim Aktivieren des neuen SW entfernen.
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
       },
       manifest: {
         name: 'Flashcards',
