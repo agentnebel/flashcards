@@ -415,10 +415,13 @@ a { color: inherit; text-decoration: none; }
   font-size: var(--t-caption);
   font-weight: 600;
 }
-.chip.new{ background: color-mix(in srgb, var(--tint) 15%, transparent); color: var(--tint); }
-.chip.learning{ background: color-mix(in srgb, var(--hard) 15%, transparent); color: var(--hard); }
-.chip.review{ background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
-.chip.relearn{ background: color-mix(in srgb, var(--again) 15%, transparent); color: var(--again); }
+/* Eigene chip-*-Präfixe statt bloßer Statusnamen: ein nackter Klassenname wie „review"
+   kollidiert sonst mit gleichnamigen, aber fachfremden Klassen anderswo im Stylesheet
+   (hier: .review = Lern-Screen-Container) und übernimmt dessen Layout-Regeln. */
+.chip.chip-new{ background: color-mix(in srgb, var(--tint) 15%, transparent); color: var(--tint); }
+.chip.chip-learning{ background: color-mix(in srgb, var(--hard) 15%, transparent); color: var(--hard); }
+.chip.chip-review{ background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.chip.chip-relearn{ background: color-mix(in srgb, var(--again) 15%, transparent); color: var(--again); }
 
 /* ---------- Buttons ---------- */
 button, .btn{

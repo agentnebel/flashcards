@@ -12,11 +12,13 @@ const STATE_LABEL: Record<number, string> = {
   [State.Relearning]: 'relearn',
 };
 
+// chip-*-Präfix bewusst: ein nackter Klassenname wie „review" kollidiert mit der
+// gleichnamigen .review-Klasse des Lern-Screens (Layout-Bug, siehe index.css).
 const STATE_CHIP: Record<number, string> = {
-  [State.New]: 'new',
-  [State.Learning]: 'learning',
-  [State.Review]: 'review',
-  [State.Relearning]: 'relearn',
+  [State.New]: 'chip-new',
+  [State.Learning]: 'chip-learning',
+  [State.Review]: 'chip-review',
+  [State.Relearning]: 'chip-relearn',
 };
 
 const PAGE = 50; // Fenstergröße fürs schrittweise Nachladen
@@ -89,7 +91,7 @@ export default function Browse() {
                     {noteCards.length} Karte(n)
                     {distinctStates.length > 0 && ' · '}
                     {distinctStates.map((s) => (
-                      <span key={s} className={`chip ${STATE_CHIP[s] ?? 'new'}`} style={{ marginLeft: 4 }}>
+                      <span key={s} className={`chip ${STATE_CHIP[s] ?? 'chip-new'}`} style={{ marginLeft: 4 }}>
                         {STATE_LABEL[s] ?? '?'}
                       </span>
                     ))}
