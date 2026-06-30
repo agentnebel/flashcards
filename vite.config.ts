@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg', 'icon-maskable.svg'],
+      includeAssets: ['icon.svg', 'icon-maskable.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'],
       workbox: {
         // SPA-Deeplinks offline auf index.html zurückfallen lassen …
         navigateFallback: '/index.html',
@@ -35,8 +35,13 @@ export default defineConfig({
         categories: ['education', 'productivity'],
         start_url: '/',
         icons: [
+          // PNG-Icons in festen Größen: von allen Plattformen (Android/Chrome/Desktop)
+          // zuverlässig für die Installation akzeptiert.
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          // Skalierbares SVG zusätzlich für gestochen scharfe Darstellung.
           { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
-          { src: '/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
         ],
       },
     }),
