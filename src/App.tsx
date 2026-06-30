@@ -1,12 +1,15 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useEffect, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import DeckList from './screens/DeckList';
-import Review from './screens/Review';
-import AddCard from './screens/AddCard';
-import Browse from './screens/Browse';
-import Settings from './screens/Settings';
-import Import from './screens/Import';
+// Landing-Route (DeckList) bleibt im Hauptbundle; die übrigen Screens werden lazy
+// geladen, damit beim ersten Start nur Shell + Decks geparst werden (kleineres Initial-JS,
+// inkl. Auslagern von marked auf die Screens, die es brauchen).
+const Review = lazy(() => import('./screens/Review'));
+const AddCard = lazy(() => import('./screens/AddCard'));
+const Browse = lazy(() => import('./screens/Browse'));
+const Settings = lazy(() => import('./screens/Settings'));
+const Import = lazy(() => import('./screens/Import'));
 import { db } from './db/db';
 import { useOnlineStatus } from './lib/useOnlineStatus';
 import { getAuth, getSyncState, loadLastSyncAt, subscribeSync, sync } from './sync/engine';
@@ -133,16 +136,18 @@ export default function App() {
       </nav>
 
       <main className="content">
-        <Routes>
-          <Route path="/" element={<DeckList />} />
-          <Route path="/deck/:deckId/study" element={<Review />} />
-          <Route path="/deck/:deckId/cram" element={<Review mode="cram" />} />
-          <Route path="/add" element={<AddCard />} />
-          <Route path="/edit/:noteId" element={<AddCard />} />
-          <Route path="/browse" element={<Browse />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/import" element={<Import />} />
-        </Routes>
+        <Suspense fallback={<p className="muted">Lädt…</p>}>
+          <Routes>
+            <Route path="/" element={<DeckList />} />
+            <Route path="/deck/:deckId/study" element={<Review />} />
+            <Route path="/deck/:deckId/cram" element={<Review mode="cram" />} />
+            <Route path="/add" element={<AddCard />} />
+            <Route path="/edit/:noteId" element={<AddCard />} />
+            <Route path="/browse" element={<Browse />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/import" element={<Import />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
