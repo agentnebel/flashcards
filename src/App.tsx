@@ -62,8 +62,8 @@ export default function App() {
   const pending = useLiveQuery(() => db.outbox.count(), [], 0);
   const location = useLocation();
 
-  // Während des Lernens (Review) auf Mobile die Tableiste ausblenden (Fokus).
-  const isReview = /^\/deck\/[^/]+\/study$/.test(location.pathname);
+  // Während des Lernens (Review/Wiederholung) auf Mobile die Tableiste ausblenden (Fokus).
+  const isReview = /^\/deck\/[^/]+\/(study|cram)$/.test(location.pathname);
 
   // Auto-Sync: bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch.
   useEffect(() => {
@@ -136,6 +136,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DeckList />} />
           <Route path="/deck/:deckId/study" element={<Review />} />
+          <Route path="/deck/:deckId/cram" element={<Review mode="cram" />} />
           <Route path="/add" element={<AddCard />} />
           <Route path="/edit/:noteId" element={<AddCard />} />
           <Route path="/browse" element={<Browse />} />

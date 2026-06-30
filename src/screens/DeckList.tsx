@@ -107,6 +107,19 @@ export default function DeckList() {
                   {fresh > 0 && <span className="pill fresh">{fresh}</span>}
                   {due === 0 && fresh === 0 && <span className="pill muted">0</span>}
                 </span>
+                <button
+                  className="row-cram"
+                  aria-label={`Alle Karten in „${deck.name}" durchgehen`}
+                  title="Alle Karten durchgehen (ändert den Lernplan nicht)"
+                  onClick={(e) => { e.stopPropagation(); navigate(`/deck/${deck.id}/cram`); }}
+                >
+                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                    <path d="M21 4v4h-4" />
+                    <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                    <path d="M3 20v-4h4" />
+                  </svg>
+                </button>
                 <span className="chevron" aria-hidden="true">›</span>
               </div>
             );

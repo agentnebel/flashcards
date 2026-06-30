@@ -695,6 +695,34 @@ input[type="checkbox"]{ width: auto; }
 .grade-bar .hard{ background: color-mix(in srgb, var(--hard) 13%, transparent); }
 .grade-bar .good{ background: color-mix(in srgb, var(--good) 13%, transparent); }
 .grade-bar .easy{ background: color-mix(in srgb, var(--easy) 13%, transparent); }
+/* Cram/Wiederholung: nur zwei Tasten (Nochmal / Gewusst), keine Intervalle */
+.grade-bar.cram{ grid-template-columns: repeat(2, 1fr); }
+
+/* „Wiederholung"-Kennzeichnung in der Review-Kopfzeile */
+.cram-tag{
+  font-size: var(--t-caption);
+  font-weight: 590;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+}
+
+/* Sekundärer „Alle durchgehen"-Knopf in einer Deck-Zeile */
+.row-cram{
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  margin-left: 4px;
+  border-radius: var(--r-pill);
+  color: var(--tint);
+  background: transparent;
+}
+.row-cram svg{ width: 19px; height: 19px; flex: 0 0 auto; }
+.row-cram:active{ background: var(--fill); }
+@media (hover:hover){ .row-cram:hover{ background: var(--fill); } }
 
 /* Mobile: pin grade bar above safe-area during review */
 @media (max-width: 767px){

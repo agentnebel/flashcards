@@ -5,6 +5,7 @@ import type { Grade, RecordLog } from 'ts-fsrs';
 import { db, type Card } from '../db/db';
 import {
   commitReview,
+  getCramQueue,
   getDesiredRetention,
   getStudyQueue,
   scheduleCard,
@@ -29,8 +30,9 @@ function buzz(ms: number) {
 
 const SWIPE_THRESHOLD = 90; // px bis eine Geste als Bewertung zählt
 
-export default function Review() {
+export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) {
   const { deckId } = useParams<{ deckId: string }>();
+  const cram = mode === 'cram';
   const [queue, setQueue] = useState<Card[] | null>(null);
   const [rendered, setRendered] = useState<{ front: string; back: string } | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -42,9 +44,10 @@ export default function Review() {
   const current = queue?.[0] ?? null;
 
   // FSRS-Plan EINMAL pro Karte berechnen (gleiches `now` für Vorschau und späteres Speichern).
+  // Im Cram-Modus nicht nötig – dort wird nichts geplant/gespeichert.
   const schedule = useMemo<RecordLog | null>(
-    () => (current ? scheduleCard(current, retention) : null),
-    [current, retention],
+    () => (current && !cram ? scheduleCard(current, retention) : null),
+    [current, retention, cram],
   );
   // Sitzungsgröße für den Fortschrittsring: erledigt + verbleibend.
   const total = done + (queue?.length ?? 0);
@@ -56,9 +59,14 @@ export default function Review() {
 
   const reload = useCallback(async () => {
     if (!deckId) return;
+    if (cram) {
+      // Cram: einmal ALLE Karten laden; kein answeredIds-Filter (Re-Queue erlaubt Wiedersehen).
+      setQueue(await getCramQueue(deckId));
+      return;
+    }
     const q = await getStudyQueue(deckId);
     setQueue(q.filter((c) => !answeredIds.current.has(c.id)));
-  }, [deckId]);
+  }, [deckId, cram]);
 
   useEffect(() => {
     getDesiredRetention().then(setRetention);
@@ -128,24 +136,43 @@ export default function Review() {
 
   const onAnswer = useCallback(
     (grade: Grade) => {
-      if (!current || !schedule) return;
+      if (!current) return;
+      buzz(grade === Rating.Again ? 18 : 10);
+
+      // Cram-/Wiederholungsmodus: KEINE FSRS-/Revlog-Änderung. „Nochmal" hängt die Karte ans
+      // Ende der Session-Schlange (später erneut zeigen), alles andere geht weiter.
+      if (cram) {
+        setRevealed(false); // deckt den 1-Karten-Fall ab, in dem `current` gleich bleibt
+        if (grade === Rating.Again) {
+          setQueue((q) => {
+            const a = q ?? [];
+            return a.length > 1 ? [...a.slice(1), a[0]] : a; // bei nur 1 Karte vorne lassen
+          });
+        } else {
+          setDone((n) => n + 1);
+          setQueue((q) => (q ?? []).slice(1));
+        }
+        return;
+      }
+
+      if (!schedule) return;
       // Re-Entrancy-Schutz: dieselbe Karte nie zweimal bewerten (schneller Doppeltipp,
       // Tasten-Autorepeat, Swipe+Klick) – sonst doppelter Revlog-Eintrag + übersprungene Folgekarte.
       if (answeredIds.current.has(current.id)) return;
       answeredIds.current.add(current.id);
-      buzz(grade === Rating.Again ? 18 : 10);
       // Optimistisch: Schlange sofort weiterschalten, DB-Write (vorab berechneter Plan) läuft write-behind.
       void commitReview(current, schedule[grade]);
       setDone((n) => n + 1);
       setQueue((q) => (q ?? []).slice(1));
     },
-    [current, schedule],
+    [current, schedule, cram],
   );
 
   // Wenn die Schlange leer wird: ggf. neu fällige Lernkarten nachladen.
+  // Im Cram-Modus NICHT – leere Schlange bedeutet dort: Durchlauf fertig (sonst Endlosschleife).
   useEffect(() => {
-    if (queue && queue.length === 0) reload();
-  }, [queue, reload]);
+    if (!cram && queue && queue.length === 0) reload();
+  }, [queue, reload, cram]);
 
   const reveal = useCallback(() => {
     if (revealed) return;
@@ -230,8 +257,26 @@ export default function Review() {
   if (!current) {
     return (
       <div className="empty stack">
-        <p>🎉 Alles erledigt für jetzt!</p>
-        <Link to="/" className="btn primary">Zurück zu den Decks</Link>
+        {cram ? (
+          <>
+            <p>✅ Alle Karten durchgegangen!</p>
+            <button
+              className="btn primary"
+              onClick={() => { setDone(0); answeredIds.current.clear(); reload(); }}
+            >
+              Noch einmal von vorn
+            </button>
+            <Link to="/" className="tint-text">Zurück zu den Decks</Link>
+          </>
+        ) : (
+          <>
+            <p>🎉 Alles erledigt für jetzt!</p>
+            <Link to="/" className="btn primary">Zurück zu den Decks</Link>
+            {deckId && (
+              <Link to={`/deck/${deckId}/cram`} className="tint-text">Trotzdem alle Karten wiederholen</Link>
+            )}
+          </>
+        )}
       </div>
     );
   }
@@ -251,6 +296,7 @@ export default function Review() {
     <div className="review">
       <div className="review-head">
         <Link to="/" className="tint-text">‹ Decks</Link>
+        {cram && <span className="cram-tag" title="Ändert deinen Lernplan nicht">Wiederholung</span>}
         <ProgressRing pct={pct} label={`${done}/${total}`} />
       </div>
 
@@ -279,6 +325,15 @@ export default function Review() {
             Antwort zeigen
           </button>
           <p className="reveal-hint">Leertaste · Tippen</p>
+        </div>
+      ) : cram ? (
+        <div className="grade-bar cram">
+          <button className="again" onClick={() => onAnswer(Rating.Again)}>
+            <span className="glabel">Nochmal</span>
+          </button>
+          <button className="good" onClick={() => onAnswer(Rating.Good)}>
+            <span className="glabel">Gewusst</span>
+          </button>
         </div>
       ) : (
         <div className="grade-bar">

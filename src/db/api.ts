@@ -327,6 +327,21 @@ export async function getStudyQueue(deckId: string): Promise<Card[]> {
   return [...due, ...fresh];
 }
 
+// Wiederholungs-/Cram-Schlange: ALLE aktiven Karten des Decks (inkl. Unterdecks),
+// unabhängig von Lernstatus und Fälligkeit. Reihenfolge gemischt (Fisher-Yates), damit
+// sich eine erneute Durchsicht nicht immer gleich anfühlt. Suspendierte/gelöschte Karten
+// bleiben außen vor. Bewerten in diesem Modus ändert NICHTS am FSRS-Plan (siehe Review).
+export async function getCramQueue(deckId: string): Promise<Card[]> {
+  const deckIds = await descendantDeckIds(deckId);
+  const all = (await Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray()))).flat();
+  const active = all.filter((c) => !c.suspended && !c.deleted);
+  for (let i = active.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [active[i], active[j]] = [active[j], active[i]];
+  }
+  return active;
+}
+
 // Vollständige FSRS-Vorschau für alle vier Bewertungen, EINMAL berechnet (gleiches `now`).
 // So entspricht das auf dem Button gezeigte Intervall exakt dem später gespeicherten (vorher
 // liefen Vorschau via repeat() und Speichern via next() mit unterschiedlichem now → Fuzz-Drift).
