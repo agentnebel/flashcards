@@ -639,6 +639,53 @@ input[type="checkbox"]{ width: auto; }
   @keyframes reveal{ from { opacity: 0 } to { opacity: 1 } }
 }
 
+/* ---- Markdown-Inhalte: Karten-Face (zentriert) + Editor-Vorschau (linksbündig) ---- */
+.review-card .face > :first-child, .md-preview-body > :first-child{ margin-top: 0; }
+.review-card .face > :last-child, .md-preview-body > :last-child{ margin-bottom: 0; }
+.review-card .face p, .md-preview-body p{ margin: 0 0 .5em; }
+.review-card .face h1, .md-preview-body h1{ font-size: 1.3em; }
+.review-card .face h2, .md-preview-body h2{ font-size: 1.15em; }
+.review-card .face h3, .md-preview-body h3{ font-size: 1.05em; }
+.review-card .face h1, .review-card .face h2, .review-card .face h3,
+.md-preview-body h1, .md-preview-body h2, .md-preview-body h3{ margin: .2em 0 .3em; line-height: 1.25; }
+.review-card .face ul, .review-card .face ol{ text-align: left; display: inline-block; }
+.review-card .face ul, .review-card .face ol,
+.md-preview-body ul, .md-preview-body ol{ margin: .3em 0; padding-left: 1.4em; }
+.review-card .face blockquote, .md-preview-body blockquote{
+  text-align: left; margin: .4em 0; padding-left: .8em;
+  border-left: 3px solid var(--separator); color: var(--label-2);
+}
+.review-card .face a, .md-preview-body a{ color: var(--tint); }
+.review-card .face code, .md-preview-body code{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .9em; background: var(--fill); padding: .1em .35em; border-radius: 6px;
+}
+.review-card .face pre, .md-preview-body pre{
+  text-align: left; background: var(--fill); padding: var(--s3);
+  border-radius: var(--r-control); overflow-x: auto; font-size: .9em;
+}
+.review-card .face pre code, .md-preview-body pre code{ background: none; padding: 0; }
+
+/* Editor-Live-Vorschau eines Feldes */
+.md-preview{
+  margin-top: var(--s2);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--r-control);
+  background: var(--bg-grouped);
+  padding: var(--s2) var(--s3) var(--s3);
+}
+.md-preview-label{
+  display: block;
+  font-size: var(--t-caption);
+  font-weight: 600;
+  color: var(--label-3);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: var(--s1);
+}
+.md-preview-body{ font-size: var(--t-body); line-height: 1.5; }
+.md-preview-body img{ max-width: 100%; height: auto; border-radius: var(--s2); }
+
 /* Swipe-Richtungshinweis hinter der Karte */
 .swipe-hint{
   position: absolute;

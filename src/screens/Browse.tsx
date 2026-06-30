@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db';
 import { deleteNote } from '../db/api';
+import { stripMarkdown } from '../lib/markdown';
 import { State } from 'ts-fsrs';
 
 const STATE_LABEL: Record<number, string> = {
@@ -23,9 +24,10 @@ const STATE_CHIP: Record<number, string> = {
 
 const PAGE = 50; // Fenstergröße fürs schrittweise Nachladen
 
-// HTML-Tags (z. B. eingebettete <img>-Bilder) für die Listen-Vorschau entfernen.
+// HTML-Tags (z. B. eingebettete <img>-Bilder) und Markdown-Marker für die Listen-Vorschau
+// entfernen, damit dort weder Roh-HTML noch *Sternchen*/`Backticks` im Klartext auftauchen.
 function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, '').trim();
+  return stripMarkdown(s.replace(/<[^>]*>/g, '')).trim();
 }
 
 export default function Browse() {

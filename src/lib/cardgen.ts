@@ -1,4 +1,5 @@
 import type { Note, NoteType } from '../db/db';
+import { renderMarkdown } from './markdown';
 
 export interface CardSpec {
   templateOrd: number;
@@ -45,12 +46,18 @@ function applyConditionals(tmpl: string, fields: Record<string, string>): string
 // Ersetzt {{Feld}}-Platzhalter; Feldnamen dürfen Unicode enthalten (z. B. "Rückseite").
 // Anki-Feldfilter wie {{type:Feld}}, {{hint:Feld}}, {{cloze:Feld}} werden auf den
 // reinen Feldwert reduziert (Teil nach dem letzten Doppelpunkt).
-function fill(tmpl: string, fields: Record<string, string>): string {
+// `renderValue` transformiert den eingesetzten Feldwert (hier: Markdown→HTML). Bereits
+// ersetztes {{FrontSide}} (fertiges HTML) durchläuft fill NICHT erneut und bleibt unberührt.
+function fill(
+  tmpl: string,
+  fields: Record<string, string>,
+  renderValue: (s: string) => string = (s) => s,
+): string {
   return applyConditionals(tmpl, fields).replace(/\{\{([^{}#^/][^{}]*)\}\}/g, (_all, raw: string) => {
     let name = raw.trim();
     const colon = name.lastIndexOf(':');
     if (colon !== -1) name = name.slice(colon + 1).trim();
-    return fields[name] ?? '';
+    return renderValue(fields[name] ?? '');
   });
 }
 
@@ -78,14 +85,16 @@ export function renderCard(
     const text = note.fields[nt.fields[0]] ?? '';
     const extra = nt.fields[1] ? note.fields[nt.fields[1]] ?? '' : '';
     const num = card.clozeNum ?? 1;
+    // Cloze-Lücken zuerst zu <span class="cloze">…</span> auflösen, dann Markdown anwenden.
+    // Marked reicht die fertigen Spans durch und rendert Markdown im umgebenden Text.
     return {
-      front: clozeRender(text, num, false),
-      back: clozeRender(text, num, true) + (extra ? `<hr>${extra}` : ''),
+      front: renderMarkdown(clozeRender(text, num, false)),
+      back: renderMarkdown(clozeRender(text, num, true)) + (extra ? `<hr>${renderMarkdown(extra)}` : ''),
     };
   }
   const tmpl = nt.templates[card.templateOrd] ?? nt.templates[0];
-  const front = fill(tmpl.qfmt, note.fields);
+  const front = fill(tmpl.qfmt, note.fields, renderMarkdown);
   // {{FrontSide}} zuerst durch die gerenderte Vorderseite ersetzen, dann übrige Felder füllen.
-  const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, front), note.fields);
+  const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, front), note.fields, renderMarkdown);
   return { front, back };
 }

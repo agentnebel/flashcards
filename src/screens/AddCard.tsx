@@ -4,7 +4,8 @@ import type { ClipboardEvent, DragEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db } from '../db/db';
 import { addNote, updateNote } from '../db/api';
-import { mediaUrl, storeImage } from '../lib/media';
+import { mediaUrl, resolveMediaHtml, storeImage } from '../lib/media';
+import { renderMarkdown } from '../lib/markdown';
 
 // Findet alle flashmedia:HASH-Referenzen in einem Feldtext (für die Thumbnail-Leiste).
 // Tolerant gegenüber Attributen vor src (z. B. <img alt="x" src="flashmedia:…">), wie sie
@@ -203,6 +204,11 @@ export default function AddCard() {
         </p>
       )}
 
+      <p className="info" style={{ margin: '0 0 var(--s4)' }}>
+        Markdown möglich: <code>**fett**</code> · <code>*kursiv*</code> ·{' '}
+        <code># Überschrift</code> · <code>- Liste</code> · <code>`Code`</code>
+      </p>
+
       {nt?.fields.map((f) => {
         const hashes = mediaHashesIn(fields[f] ?? '');
         return (
@@ -247,6 +253,7 @@ export default function AddCard() {
                 ))}
               </div>
             )}
+            <MarkdownPreview source={fields[f] ?? ''} />
           </div>
         );
       })}
@@ -254,6 +261,28 @@ export default function AddCard() {
       <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave} onClick={() => void onSave()}>
         {saved ? '✓ Gespeichert' : isEdit ? 'Änderungen speichern' : 'Karte speichern'}
       </button>
+    </div>
+  );
+}
+
+// Live-Vorschau eines Feldes: rendert Markdown→HTML und löst flashmedia-Bilder zu
+// Object-URLs auf (wie im Review), damit man beim Erstellen die Formatierung sieht.
+function MarkdownPreview({ source }: { source: string }) {
+  const [html, setHtml] = useState('');
+  useEffect(() => {
+    let alive = true;
+    resolveMediaHtml(renderMarkdown(source)).then((h) => {
+      if (alive) setHtml(h);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [source]);
+  if (!source.trim()) return null;
+  return (
+    <div className="md-preview">
+      <span className="md-preview-label">Vorschau</span>
+      <div className="md-preview-body" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }
