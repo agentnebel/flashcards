@@ -25,10 +25,16 @@ const STATE_CHIP: Record<number, string> = {
 
 const PAGE = 50; // Fenstergröße fürs schrittweise Nachladen
 
-// HTML-Tags (z. B. eingebettete <img>-Bilder) und Markdown-Marker für die Listen-Vorschau
-// entfernen, damit dort weder Roh-HTML noch *Sternchen*/`Backticks` im Klartext auftauchen.
+// Cloze-Lücken {{c1::Antwort}} bzw. {{c1::Antwort::Hinweis}} auf die reine Antwort
+// reduzieren, damit in der Listen-Vorschau nicht die rohe Syntax steht.
+function stripCloze(s: string): string {
+  return s.replace(/\{\{c\d+::(.*?)(?:::.*?)?\}\}/g, '$1');
+}
+
+// HTML-Tags (z. B. eingebettete <img>-Bilder), Cloze-Syntax und Markdown-Marker für die
+// Listen-Vorschau entfernen, damit dort weder Roh-HTML, {{c1::…}} noch *Sternchen* auftauchen.
 function stripTags(s: string): string {
-  return stripMarkdown(s.replace(/<[^>]*>/g, '')).trim();
+  return stripMarkdown(stripCloze(s).replace(/<[^>]*>/g, '')).trim();
 }
 
 // Deck-Pfad „Eltern › Kind" für eindeutige Sektionsüberschriften (auch bei Unterdecks).
