@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import './Landing.css';
 
@@ -80,7 +80,7 @@ export function SiteFooter() {
 function FlipCard() {
   const [flipped, setFlipped] = useState(false);
   return (
-    <div className="landing-flip-wrap">
+    <div className="landing-flip-wrap" data-parallax="0.05">
       <div className="landing-flip-perspective">
         <div
           className={`landing-flip-inner${flipped ? ' is-flipped' : ''}`}
@@ -116,9 +116,101 @@ function FlipCard() {
   );
 }
 
+// Dezente Scroll-Reveal- + Parallax-Effekte. Bewusst performant:
+//  · Reveal via IntersectionObserver (einmalig, dann unobserve) — kein Scroll-Listener.
+//  · Parallax über EINE passive, rAF-gedrosselte Scroll-Schleife, die nur `transform`
+//    schreibt (Compositor-only, kein Layout/Reflow). Anker werden einmal vermessen.
+//  · Vollständig deaktiviert bei `prefers-reduced-motion` und auf schmalen Screens.
+function useScrollEffects(rootRef: React.RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // --- Scroll-Reveal ---
+    let io: IntersectionObserver | null = null;
+    if (!reduce) {
+      io = new IntersectionObserver(
+        (entries, obs) => {
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              e.target.classList.add('is-visible');
+              obs.unobserve(e.target); // einmalig: kein Re-Hide beim Zurückscrollen
+            }
+          }
+        },
+        { rootMargin: '0px 0px -10% 0px', threshold: 0.12 },
+      );
+      root.querySelectorAll('.reveal').forEach((el) => io!.observe(el));
+    }
+    // (bei reduced-motion macht das CSS `.reveal` ohnehin sofort sichtbar)
+
+    // --- Parallax ---
+    const pNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-parallax]'));
+    let onScroll: (() => void) | null = null;
+    let onResize: (() => void) | null = null;
+
+    if (!reduce && pNodes.length) {
+      let anchors: number[] = [];
+      let ticking = false;
+
+      const measure = () => {
+        for (const el of pNodes) el.style.transform = '';
+        anchors = pNodes.map((el) => {
+          const r = el.getBoundingClientRect();
+          return r.top + window.scrollY + r.height / 2; // Dokument-Mitte des Elements
+        });
+      };
+      const update = () => {
+        ticking = false;
+        const small = window.innerWidth < 700; // Parallax auf Mobile aus (weniger sinnvoll)
+        const mid = window.scrollY + window.innerHeight / 2;
+        pNodes.forEach((el, i) => {
+          if (small) {
+            el.style.transform = '';
+            return;
+          }
+          const speed = parseFloat(el.dataset.parallax || '0');
+          const y = (mid - anchors[i]) * speed;
+          el.style.transform = `translate3d(0, ${y.toFixed(1)}px, 0)`;
+        });
+      };
+      onScroll = () => {
+        if (!ticking) {
+          ticking = true;
+          requestAnimationFrame(update);
+        }
+      };
+      onResize = () => {
+        measure();
+        update();
+      };
+
+      for (const el of pNodes) el.style.willChange = 'transform';
+      measure();
+      update();
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', onResize);
+    }
+
+    return () => {
+      io?.disconnect();
+      if (onScroll) window.removeEventListener('scroll', onScroll);
+      if (onResize) window.removeEventListener('resize', onResize);
+      for (const el of pNodes) {
+        el.style.willChange = '';
+        el.style.transform = '';
+      }
+    };
+  }, [rootRef]);
+}
+
 export default function Landing() {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useScrollEffects(rootRef);
+
   return (
-    <div className="landing">
+    <div className="landing" ref={rootRef}>
       <SiteHeader />
 
       <section className="landing-hero">
@@ -146,13 +238,13 @@ export default function Landing() {
       </section>
 
       <section className="landing-features">
-        <div className="landing-section-head">
+        <div className="landing-section-head reveal">
           <div className="landing-eyebrow">FUNKTIONEN</div>
           <h2 className="landing-h2">Fünf Dinge, die zählen.</h2>
         </div>
         <div className="landing-feature-list">
           {FEATURES.map((f, i) => (
-            <div className="landing-feature-row" key={f.title}>
+            <div className="landing-feature-row reveal" key={f.title}>
               <div className="landing-feature-index" style={{ color: f.color }}>
                 {String(i + 1).padStart(2, '0')}
               </div>
@@ -167,7 +259,7 @@ export default function Landing() {
 
       <section className="landing-algo">
         <div className="landing-algo-grid">
-          <div>
+          <div className="reveal">
             <div className="landing-eyebrow" style={{ color: 'var(--landing-good)', marginBottom: 16 }}>
               DER ALGORITHMUS
             </div>
@@ -182,7 +274,7 @@ export default function Landing() {
               was noch wackelt — nicht mit dem, was längst sitzt.
             </p>
           </div>
-          <div className="landing-mock">
+          <div className="landing-mock" data-parallax="0.04">
             <div className="landing-mock-q">Hauptstadt von Japan?</div>
             <div className="landing-grade-grid">
               {GRADES.map((g) => (
@@ -199,7 +291,7 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="landing-oss">
+      <section className="landing-oss reveal">
         <div className="landing-eyebrow">100% OPEN SOURCE</div>
         <h2 className="landing-h2">Der Code gehört dir. MIT-lizenziert.</h2>
         <p className="landing-oss-lead">

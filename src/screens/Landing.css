@@ -262,3 +262,26 @@
   .landing-algo-grid { gap: 40px; }
   .landing-feature-row { gap: 20px; }
 }
+
+/* ---------- Scroll-Reveal & Parallax (dezent, GPU-schonend) ----------
+   .reveal wird per IntersectionObserver einmalig sichtbar geschaltet (kein
+   Scroll-Handler). Parallax läuft über eine einzige rAF-gedrosselte Schleife,
+   die ausschließlich `transform` schreibt (nur Compositor, kein Reflow).
+   `will-change` setzt das JS gezielt nur während aktivem Parallax. */
+.landing .reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.7s var(--ease), transform 0.7s var(--ease);
+}
+.landing .reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
