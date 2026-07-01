@@ -7,28 +7,28 @@ const GITHUB_URL = 'https://github.com/agentnebel/flashcards';
 const FEATURES: { color: string; title: string; desc: string }[] = [
   {
     color: 'var(--landing-good)',
-    title: 'Intelligente Wiederholung (FSRS)',
-    desc: 'Was du kannst, siehst du seltener. Der Algorithmus plant jede Karte einzeln nach deinem Gedächtnis — und spart dir echte Lernzeit.',
+    title: 'Wiederholung nach Plan (FSRS)',
+    desc: 'Was du sicher kannst, kommt seltener dran. FSRS plant jede Karte einzeln nach deinem Gedächtnis. Die Wiederholungen, die du eh nicht brauchst, fallen weg.',
   },
   {
     color: 'var(--landing-tint)',
     title: 'Sync über alle Geräte',
-    desc: 'Einmal anmelden, fertig. Karten und Fortschritt landen automatisch überall — beim Start, beim Online-Gehen und alle 60 Sekunden.',
+    desc: 'Einmal anmelden und deine Karten sind auf jedem Gerät dabei. Der Fortschritt gleicht sich im Hintergrund ab, du musst nichts weiter tun.',
   },
   {
     color: 'var(--landing-hard)',
-    title: 'Bilder & drei Kartentypen',
-    desc: 'Einfach, umgekehrt oder Lückentext — mit Bildern per Einfügen, Datei oder Drag & Drop, automatisch komprimiert.',
+    title: 'Bilder und drei Kartentypen',
+    desc: 'Normal, umgekehrt oder Lückentext. Bilder ziehst du einfach ins Feld, die App rechnet sie automatisch klein.',
   },
   {
     color: 'var(--landing-again)',
-    title: 'Import & Backup',
-    desc: 'CSV, TSV und ältere .apkg-Dateien kommen mit Feld-Mapping rein — und als JSON inklusive Bilder wieder raus.',
+    title: 'Import und Backup',
+    desc: 'Deine alten Decks bringst du aus CSV, TSV oder Anki mit. Und wenn du gehen willst, nimmst du alles als JSON wieder mit, Bilder inklusive.',
   },
   {
     color: 'var(--landing-good)',
-    title: 'Offline & werbefrei',
-    desc: 'Installierbare PWA — lernen geht immer. Kein Tracking, kein Abo, keine Werbung.',
+    title: 'Offline und werbefrei',
+    desc: 'Einmal installiert, läuft die App auch ohne Internet. Kein Tracking, keine Werbung.',
   },
 ];
 
@@ -77,6 +77,14 @@ export function SiteFooter() {
   );
 }
 
+function GithubMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+      <path d="M12 .5C5.73.5.5 5.74.5 12.02c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.42.36.8 1.08.8 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.8.56A10.53 10.53 0 0 0 23.5 12.02C23.5 5.74 18.27.5 12 .5Z" />
+    </svg>
+  );
+}
+
 function FlipCard() {
   const [flipped, setFlipped] = useState(false);
   return (
@@ -97,20 +105,20 @@ function FlipCard() {
         >
           <div className="landing-flip-face landing-flip-front">
             <div className="landing-flip-q">Was ist die beste Art, etwas nicht zu vergessen?</div>
-            <div className="landing-flip-hint">Karte zum Umdrehen bewegen ↻</div>
+            <div className="landing-flip-hint">Zum Umdrehen antippen</div>
           </div>
           <div className="landing-flip-face landing-flip-back">
             <div className="landing-flip-a">
-              Sie im <em>richtigen Moment</em> wiederholen.
+              Es im <em>richtigen Moment</em> wiederholen.
             </div>
             <div className="landing-flip-sub">
-              Genau das übernimmt Flashcards für dich — automatisch, für jede einzelne Karte.
+              Genau das macht Flashcards für dich, Karte für Karte.
             </div>
           </div>
         </div>
       </div>
       <div className="landing-flip-caption">
-        Genau so funktioniert der Lernmodus: antippen → Antwort → bewerten.
+        So läuft eine Wiederholung: Karte ansehen, umdrehen, ehrlich bewerten.
       </div>
     </div>
   );
@@ -215,7 +223,7 @@ export default function Landing() {
 
       <section className="landing-hero">
         <div>
-          <div className="landing-eyebrow">DEINE KARTEN · ÜBERALL · FÜR IMMER</div>
+          <div className="landing-eyebrow">KOSTENLOS UND OPEN SOURCE</div>
           <h1 className="landing-h1">
             Zwei Seiten.
             <br />
@@ -224,17 +232,51 @@ export default function Landing() {
             Es bleibt&nbsp;drin.
           </h1>
           <p className="landing-lead">
-            Lernkarten fürs Handy und den Browser. Der clevere Wiederholungs-Rhythmus sorgt dafür,
-            dass du dranbleibst — ganz ohne Werbung oder Abo.
+            Lernkarten für dein Handy und deinen Browser. Die App zeigt dir jede Karte genau dann
+            wieder, wenn du sie fast vergessen hättest. So bleibst du dran, ohne Abo und ohne Werbung.
           </p>
           <div className="landing-cta-row">
-            <Link to="/app" className="landing-btn landing-btn-primary">Demo</Link>
+            <Link to="/app" className="landing-btn landing-btn-primary">App öffnen</Link>
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="landing-btn landing-btn-secondary">
-              ★ GitHub
+              <GithubMark />
+              GitHub
             </a>
           </div>
         </div>
         <FlipCard />
+      </section>
+
+      <section className="landing-shots-section reveal">
+        <div className="landing-section-head">
+          <div className="landing-eyebrow">HANDY UND BROWSER</div>
+          <h2 className="landing-h2">Auf jedem Gerät zuhause.</h2>
+        </div>
+        <div className="landing-shots">
+          <figure className="shot-browser">
+            <div className="shot-browser-bar" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <div className="shot-browser-url">flashcards.belz.cloud</div>
+            </div>
+            <img
+              src="/screenshots/app-desktop.png"
+              width={1600}
+              height={1058}
+              loading="lazy"
+              alt="Flashcards im Browser: die Kartenübersicht mit den eigenen Decks"
+            />
+          </figure>
+          <figure className="shot-phone">
+            <img
+              src="/screenshots/app-mobile.png"
+              width={640}
+              height={1369}
+              loading="lazy"
+              alt="Flashcards auf dem Handy: eine aufgedeckte Karte mit den Bewertungstasten"
+            />
+          </figure>
+        </div>
       </section>
 
       <section className="landing-features">
@@ -265,13 +307,13 @@ export default function Landing() {
             </div>
             <h2 className="landing-h2">Warum du seltener wiederholen musst.</h2>
             <p>
-              Nach jeder Karte bewertest du selbst: <strong>Nochmal, Schwer, Gut</strong> oder{' '}
-              <strong>Einfach</strong>. FSRS berechnet daraus, wann genau du diese Karte das nächste
-              Mal siehst.
+              Nach jeder Karte sagst du selbst, wie es lief: <strong>Nochmal</strong>,{' '}
+              <strong>Schwer</strong>, <strong>Gut</strong> oder <strong>Einfach</strong>. Daraus
+              rechnet FSRS aus, wann du die Karte das nächste Mal brauchst.
             </p>
             <p>
-              Gut Gekonntes wandert Tage oder Wochen nach hinten. So verbringst du deine Zeit mit dem,
-              was noch wackelt — nicht mit dem, was längst sitzt.
+              Was sitzt, rutscht Tage oder Wochen nach hinten. Der Rest kommt öfter dran. So landet
+              deine Lernzeit da, wo sie wirklich etwas bringt.
             </p>
           </div>
           <div className="landing-mock" data-parallax="0.04">
@@ -285,7 +327,7 @@ export default function Landing() {
               ))}
             </div>
             <div className="landing-mock-caption">
-              <span>Auf dem Handy: swipen · am Desktop: Tasten 1–4</span>
+              <span>Auf dem Handy wischst du, am Desktop drückst du 1 bis 4.</span>
             </div>
           </div>
         </div>
@@ -295,11 +337,12 @@ export default function Landing() {
         <div className="landing-eyebrow">100% OPEN SOURCE</div>
         <h2 className="landing-h2">Der Code gehört dir. MIT-lizenziert.</h2>
         <p className="landing-oss-lead">
-          Alles liegt offen auf GitHub. Lies mit, fork es, hoste es selbst — läuft im Free-Tier von
-          Cloudflare praktisch kostenlos.
+          Der komplette Code liegt offen auf GitHub. Schau rein, fork ihn oder hoste die App selbst.
+          Im Free-Tier von Cloudflare kostet dich das praktisch nichts.
         </p>
         <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="landing-btn landing-btn-invert">
-          ★&nbsp;&nbsp;Star auf GitHub
+          <GithubMark />
+          Auf GitHub ansehen
         </a>
       </section>
 

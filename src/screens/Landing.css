@@ -100,11 +100,13 @@
 .landing-btn {
   display: inline-flex;
   align-items: center;
+  gap: 9px;
   font-weight: 600;
   font-size: 18px;
   padding: 16px 30px;
   border-radius: 14px;
 }
+.landing-btn svg { flex: 0 0 auto; }
 /* Compound selectors (.landing-btn.landing-btn-*): both classes are always present
    together on the element, so this beats ".landing a { color: inherit }" on specificity
    (two classes > one class+type) without resorting to !important. */
@@ -240,6 +242,80 @@
 .landing-oss { padding: 0 var(--landing-pad-x) 100px; text-align: center; }
 .landing-oss .landing-h2 { margin: 0 auto; max-width: 620px; line-height: 1.06; }
 .landing-oss-lead { font-size: clamp(16px, 2vw, 19px); line-height: 1.6; color: var(--landing-text-2); max-width: 560px; margin: 20px auto 34px; }
+/* ---------- Geräte-Showcase (Screenshots im Browser-/Phone-Rahmen) ---------- */
+.landing-shots-section { padding: 12px var(--landing-pad-x) 96px; }
+.landing-shots {
+  position: relative;
+  max-width: 860px;
+  margin: 52px auto 0;
+}
+
+/* Browser-Fenster */
+.shot-browser {
+  margin: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 0.5px solid var(--landing-border-strong);
+  background: #0d0d0e;
+  box-shadow: 0 40px 90px -34px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+.shot-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  background: #161617;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+}
+.shot-browser-bar > span {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  flex: 0 0 auto;
+}
+.shot-browser-url {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--landing-text-3);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 7px;
+  padding: 4px 12px;
+  flex: 1;
+  max-width: 300px;
+  text-align: center;
+}
+.shot-browser img { display: block; width: 100%; height: auto; }
+
+/* Phone, überlappt die Browser-Ecke */
+.shot-phone {
+  position: absolute;
+  right: -12px;
+  bottom: -48px;
+  width: 208px;
+  margin: 0;
+  padding: 7px;
+  border-radius: 30px;
+  background: #0a0a0b;
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 34px 64px -22px rgba(0, 0, 0, 0.9);
+}
+.shot-phone img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 23px;
+}
+
+@media (max-width: 860px) {
+  .landing-shots { max-width: 480px; }
+  .shot-phone {
+    position: static;
+    width: 190px;
+    margin: -56px auto 0;
+  }
+}
+
 /* ---------- Footer ---------- */
 .landing-footer {
   border-top: 0.5px solid var(--landing-divider-2);
