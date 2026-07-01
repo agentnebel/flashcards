@@ -4,19 +4,10 @@ Eine Lernkarten-App fürs Handy und den Browser. Karten anlegen, lernen, von üb
 
 ---
 
-## Screenshots
+## DEMO
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/01-decks.png" width="200" alt="Decks-Übersicht"/><br/><sub>Decks-Übersicht</sub></td>
-    <td align="center"><img src="docs/screenshots/02-review-question.png" width="200" alt="Lernmodus — Frage"/><br/><sub>Lernmodus</sub></td>
-    <td align="center"><img src="docs/screenshots/03-review-answer.png" width="200" alt="Lernmodus — Antwort"/><br/><sub>Antwort bewerten</sub></td>
-    <td align="center"><img src="docs/screenshots/04-add-card.png" width="200" alt="Neue Karte"/><br/><sub>Karte erstellen</sub></td>
-    <td align="center"><img src="docs/screenshots/05-browse.png" width="200" alt="Karten-Liste"/><br/><sub>Karten-Liste</sub></td>
-  </tr>
-</table>
+[Preview](https://flashcards.belz.cloud)
 
----
 
 ## Was die App kann
 
