@@ -60,14 +60,42 @@ Die App läuft komplett offline — der Worker wird nur für den Sync gebraucht.
 
 ---
 
-## Lokal starten
+## Installation
+
+Vorausgesetzt werden [Node.js](https://nodejs.org) 20 oder neuer (bringt `npm` schon mit) und `git`.
+
+**1. Repo klonen**
+
+```bash
+git clone https://github.com/agentnebel/flashcards.git
+cd flashcards
+```
+
+**2. Abhängigkeiten installieren**
 
 ```bash
 npm install
-npm run dev   # startet auf http://localhost:5173
 ```
 
-Sync lokal testen (Worker + D1):
+**3. App starten**
+
+```bash
+npm run dev
+```
+
+**4. Im Browser öffnen**
+
+[http://localhost:5173](http://localhost:5173) — Karten anlegen, direkt lernen. Ohne Account läuft alles lokal im Browser (IndexedDB), es wird nichts synchronisiert.
+
+Für den Produktiv-Build (das, was auch deployt wird):
+
+```bash
+npm run build   # baut nach ./dist
+```
+
+### Sync lokal testen (optional, Worker + D1)
+
+Wer auch den Cloudflare-Teil (Login, Sync über mehrere Geräte) lokal ausprobieren will:
 
 ```bash
 echo 'JWT_SECRET=dev-secret' > .dev.vars
