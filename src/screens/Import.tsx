@@ -20,7 +20,7 @@ export default function Import() {
     <div>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1 className="screen-title" style={{ marginBottom: 'var(--s5)' }}>Importieren</h1>
-        <Link to="/settings" className="tint-text">‹ Einstellungen</Link>
+        <Link to="/app/settings" className="tint-text">‹ Einstellungen</Link>
       </div>
 
       <div className="field">

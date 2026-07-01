@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import DeckList from './screens/DeckList';
-// Landing-Route (DeckList) bleibt im Hauptbundle; die übrigen Screens werden lazy
-// geladen, damit beim ersten Start nur Shell + Decks geparst werden (kleineres Initial-JS,
-// inkl. Auslagern von marked auf die Screens, die es brauchen).
+// DeckList (Startpunkt von /app) bleibt im Hauptbundle dieses Chunks; die übrigen Screens
+// werden lazy geladen, damit beim ersten Öffnen der App nur Shell + Decks geparst werden
+// (kleineres Initial-JS, inkl. Auslagern von marked auf die Screens, die es brauchen).
 const Review = lazy(() => import('./screens/Review'));
 const AddCard = lazy(() => import('./screens/AddCard'));
 const Browse = lazy(() => import('./screens/Browse'));
@@ -66,7 +66,7 @@ export default function App() {
   const location = useLocation();
 
   // Während des Lernens (Review/Wiederholung) auf Mobile die Tableiste ausblenden (Fokus).
-  const isReview = /^\/deck\/[^/]+\/(study|cram)$/.test(location.pathname);
+  const isReview = /\/deck\/[^/]+\/(study|cram)$/.test(location.pathname);
 
   // Auto-Sync: bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch.
   useEffect(() => {
@@ -116,20 +116,20 @@ export default function App() {
       </header>
 
       <nav className="navbar">
-        <span className="sidebar-head">Flashcards</span>
-        <NavLink to="/" end>
+        <Link to="/" className="sidebar-head">Flashcards</Link>
+        <NavLink to="/app" end>
           <IconDecks />
           <span>Decks</span>
         </NavLink>
-        <NavLink to="/add">
+        <NavLink to="/app/add">
           <IconAdd />
           <span>Hinzufügen</span>
         </NavLink>
-        <NavLink to="/browse">
+        <NavLink to="/app/browse">
           <IconCards />
           <span>Karten</span>
         </NavLink>
-        <NavLink to="/settings">
+        <NavLink to="/app/settings">
           <IconSettings />
           <span>Einstellungen</span>
         </NavLink>
@@ -138,14 +138,14 @@ export default function App() {
       <main className="content">
         <Suspense fallback={<p className="muted">Lädt…</p>}>
           <Routes>
-            <Route path="/" element={<DeckList />} />
-            <Route path="/deck/:deckId/study" element={<Review />} />
-            <Route path="/deck/:deckId/cram" element={<Review mode="cram" />} />
-            <Route path="/add" element={<AddCard />} />
-            <Route path="/edit/:noteId" element={<AddCard />} />
-            <Route path="/browse" element={<Browse />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/import" element={<Import />} />
+            <Route index element={<DeckList />} />
+            <Route path="deck/:deckId/study" element={<Review />} />
+            <Route path="deck/:deckId/cram" element={<Review mode="cram" />} />
+            <Route path="add" element={<AddCard />} />
+            <Route path="edit/:noteId" element={<AddCard />} />
+            <Route path="browse" element={<Browse />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="import" element={<Import />} />
           </Routes>
         </Suspense>
       </main>

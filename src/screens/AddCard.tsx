@@ -162,7 +162,7 @@ export default function AddCard() {
     if (isEdit && noteId) {
       await updateNote(noteId, fields, deckId, noteTypeId);
       setSaved(true);
-      setTimeout(() => { setSaved(false); navigate('/browse'); }, 1000);
+      setTimeout(() => { setSaved(false); navigate('/app/browse'); }, 1000);
     } else {
       await addNote({ noteTypeId: nt.id, deckId, fields });
       setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
@@ -176,7 +176,7 @@ export default function AddCard() {
     <div>
       <h1 className="screen-title">{isEdit ? 'Karte bearbeiten' : 'Neue Karte'}</h1>
       {isEdit && (
-        <button className="back-btn" onClick={() => navigate('/browse')}>← Zurück</button>
+        <button className="back-btn" onClick={() => navigate('/app/browse')}>← Zurück</button>
       )}
 
       <div className="field">

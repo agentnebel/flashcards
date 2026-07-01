@@ -1,0 +1,164 @@
+/* Rechtstexte (Impressum/Datenschutz) — gleiche dunkle Designsprache wie Landing.tsx:
+   Site-Header/-Footer, ein hervorgehobenes „Verantwortlicher"-Kärtchen und nummerierte
+   Abschnitte auf einer Gradient-Fläche. Tokens (--landing-*) kommen aus Landing.css. */
+
+.legal {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 12px var(--landing-pad-x) 72px;
+}
+
+/* Zurück-Link */
+.legal-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--landing-text-2);
+  padding: 8px 0;
+  margin-bottom: 20px;
+  transition: color 0.15s var(--ease, ease);
+}
+.legal-back:hover { color: var(--landing-text); }
+.legal-back svg { width: 16px; height: 16px; }
+
+/* Titelblock */
+.legal-hero { margin-bottom: 28px; }
+.legal-title {
+  font-size: clamp(32px, 6vw, 46px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin: 12px 0 0;
+}
+.legal-meta {
+  display: inline-block;
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--landing-text-3);
+  background: rgba(255, 255, 255, 0.05);
+  border: 0.5px solid var(--landing-border-strong);
+  padding: 6px 13px;
+  border-radius: 999px;
+}
+
+/* Hervorgehobenes Verantwortlicher-/Kontakt-Kärtchen */
+.legal-identity {
+  position: relative;
+  background: linear-gradient(180deg, rgba(10, 132, 255, 0.1), rgba(10, 132, 255, 0.03));
+  border: 0.5px solid rgba(10, 132, 255, 0.25);
+  border-radius: 20px;
+  padding: 24px 26px 24px 28px;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.legal-identity::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--landing-tint);
+}
+.legal-identity-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--landing-tint);
+  margin-bottom: 12px;
+}
+.legal-identity-body {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--landing-text);
+}
+.legal-identity-body strong { font-weight: 650; }
+.legal-identity-body a {
+  color: var(--landing-tint);
+  text-decoration: none;
+}
+.legal-identity-body a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.legal-identity-contact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 0.5px solid rgba(10, 132, 255, 0.18);
+  font-size: 15px;
+  color: var(--landing-text-2);
+}
+
+/* Gradient-Fläche mit nummerierten Abschnitten */
+.legal-sheet {
+  background: linear-gradient(180deg, #111112, #0d0d0e);
+  border: 0.5px solid var(--landing-border-subtle);
+  border-radius: 24px;
+  padding: 4px clamp(20px, 4vw, 40px);
+}
+.legal-section {
+  display: flex;
+  gap: clamp(16px, 3vw, 28px);
+  padding: 30px 0;
+  border-top: 0.5px solid var(--landing-divider);
+}
+.legal-section:first-child { border-top: none; }
+.legal-section-index {
+  flex: 0 0 auto;
+  width: 30px;
+  padding-top: 3px;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.legal-section-main { min-width: 0; }
+.legal-section-title {
+  font-size: clamp(18px, 2.4vw, 21px);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin: 0 0 12px;
+  color: var(--landing-text);
+}
+.legal-section-body p,
+.legal-section-body li {
+  font-size: 15.5px;
+  line-height: 1.7;
+  color: var(--landing-text-2);
+}
+.legal-section-body p { margin: 0 0 12px; }
+.legal-section-body p:last-child { margin-bottom: 0; }
+.legal-section-body ul { margin: 0 0 12px; padding-left: 20px; }
+.legal-section-body li { margin-bottom: 8px; }
+.legal-section-body li:last-child { margin-bottom: 0; }
+.legal-section-body strong { color: var(--landing-text); font-weight: 600; }
+.legal-section-body a {
+  color: var(--landing-tint);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(10, 132, 255, 0.45);
+  transition: text-decoration-color 0.15s var(--ease, ease);
+}
+.legal-section-body a:hover { text-decoration-color: var(--landing-tint); }
+
+/* Fußnote (z. B. „ersetzt keine Rechtsberatung") */
+.legal-note {
+  margin: 26px 4px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--landing-text-4);
+  text-align: center;
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+  .legal-section { gap: 14px; }
+  .legal-section-index { width: 24px; font-size: 14px; }
+  .legal-identity { padding: 20px 20px 20px 22px; }
+}

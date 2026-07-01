@@ -111,7 +111,7 @@ export default function Settings() {
               style={{ display: 'none' }}
               onChange={onImportFile}
             />
-            <Link to="/import" className="btn block">Importieren (CSV/.apkg)</Link>
+            <Link to="/app/import" className="btn block">Importieren (CSV/.apkg)</Link>
           </div>
           {importMsg && (
             <p className="info" style={{ marginTop: 'var(--s3)', marginBottom: 0 }}>{importMsg}</p>

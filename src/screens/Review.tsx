@@ -247,7 +247,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     return (
       <div className="review">
         <div className="review-head">
-          <Link to="/" className="tint-text">‹ Decks</Link>
+          <Link to="/app" className="tint-text">‹ Decks</Link>
         </div>
         <p className="muted">Lädt…</p>
       </div>
@@ -266,14 +266,14 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
             >
               Noch einmal von vorn
             </button>
-            <Link to="/" className="tint-text">Zurück zu den Decks</Link>
+            <Link to="/app" className="tint-text">Zurück zu den Decks</Link>
           </>
         ) : (
           <>
             <p>🎉 Alles erledigt für jetzt!</p>
-            <Link to="/" className="btn primary">Zurück zu den Decks</Link>
+            <Link to="/app" className="btn primary">Zurück zu den Decks</Link>
             {deckId && (
-              <Link to={`/deck/${deckId}/cram`} className="tint-text">Trotzdem alle Karten wiederholen</Link>
+              <Link to={`/app/deck/${deckId}/cram`} className="tint-text">Trotzdem alle Karten wiederholen</Link>
             )}
           </>
         )}
@@ -295,7 +295,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   return (
     <div className="review">
       <div className="review-head">
-        <Link to="/" className="tint-text">‹ Decks</Link>
+        <Link to="/app" className="tint-text">‹ Decks</Link>
         {cram && <span className="cram-tag" title="Ändert deinen Lernplan nicht">Wiederholung</span>}
         <ProgressRing pct={pct} label={`${done}/${total}`} />
       </div>

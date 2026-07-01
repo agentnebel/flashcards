@@ -93,11 +93,11 @@ export default function DeckList() {
                 className="row-item tappable"
                 role="button"
                 tabIndex={0}
-                onClick={() => navigate(`/deck/${deck.id}/study`)}
+                onClick={() => navigate(`/app/deck/${deck.id}/study`)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    navigate(`/deck/${deck.id}/study`);
+                    navigate(`/app/deck/${deck.id}/study`);
                   }
                 }}
               >
@@ -111,7 +111,7 @@ export default function DeckList() {
                   className="row-cram"
                   aria-label={`Alle Karten in „${deck.name}" durchgehen`}
                   title="Alle Karten durchgehen (ändert den Lernplan nicht)"
-                  onClick={(e) => { e.stopPropagation(); navigate(`/deck/${deck.id}/cram`); }}
+                  onClick={(e) => { e.stopPropagation(); navigate(`/app/deck/${deck.id}/cram`); }}
                 >
                   <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />

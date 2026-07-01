@@ -33,7 +33,10 @@ export default defineConfig({
         display: 'standalone',
         display_override: ['standalone', 'minimal-ui'],
         categories: ['education', 'productivity'],
-        start_url: '/',
+        // "/" ist seit der Marketing-Landingpage nur noch der öffentliche Auftritt; die
+        // installierte PWA soll direkt in die App (Deckliste) starten, nicht dort.
+        start_url: '/app',
+        scope: '/app',
         icons: [
           // PNG-Icons in festen Größen: von allen Plattformen (Android/Chrome/Desktop)
           // zuverlässig für die Installation akzeptiert.
