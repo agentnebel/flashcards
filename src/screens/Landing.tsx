@@ -236,7 +236,7 @@ export default function Landing() {
             wieder, wenn du sie fast vergessen hättest. So bleibst du dran, ohne Abo und ohne Werbung.
           </p>
           <div className="landing-cta-row">
-            <Link to="/app" className="landing-btn landing-btn-primary">App öffnen</Link>
+            <Link to="/app" className="landing-btn landing-btn-primary">Demo</Link>
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="landing-btn landing-btn-secondary">
               <GithubMark />
               GitHub
