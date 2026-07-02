@@ -76,6 +76,16 @@ async function authResult(res: Response): Promise<Auth> {
   }
   const { token, user } = (await res.json()) as { token: string; user: { id: string; email: string } };
   const auth: Auth = { token, userId: user.id, email: user.email };
+  // Kontowechsel erkennen: Meldet sich ein ANDERES Konto an als das, dem die lokalen
+  // Daten zuletzt gehörten, werden diese vorher gelöscht — sonst würde die Outbox des
+  // alten Kontos unter dem neuen Token hochgeladen (Kontamination). Gleiches Konto
+  // (z. B. nach Session-Ablauf) behält Daten, Cursor und Outbox. Ohne lastAccountId
+  // (nie gesynct) bleiben lokale Karten erhalten und werden hochgeladen (wie beworben).
+  const prev = await db.meta.get('lastAccountId');
+  if (typeof prev?.value === 'string' && prev.value !== user.id) {
+    await wipeLocalData();
+  }
+  await db.meta.put({ key: 'lastAccountId', value: user.id });
   await db.meta.put({ key: 'auth', value: auth });
   setState({ error: null });
   return auth;
@@ -87,11 +97,10 @@ export async function register(email: string, password: string): Promise<Auth> {
 export async function login(email: string, password: string): Promise<Auth> {
   return authResult(await apiPost('/api/auth/login', { email, password }));
 }
-export async function logout(): Promise<void> {
-  // Lokale Daten vollständig löschen. Sonst blieben auf einem geteilten Gerät die
-  // Karten/Notizen des Vorkontos sichtbar und – schlimmer – die noch nicht gesyncte
-  // Outbox würde beim nächsten Login unter fremdem Token hochgeladen (Kontamination).
-  // Synchronisierte Daten gehen nicht verloren: Login pullt ab Cursor 0 alles erneut.
+// Lokale Daten vollständig löschen (Tabellen + Sync-Zustand). Wird nur beim expliziten
+// Logout und beim Kontowechsel aufgerufen — NICHT bei abgelaufener Session, sonst wären
+// alle seit dem letzten Sync entstandenen (ungesyncten) Änderungen unwiderruflich weg.
+async function wipeLocalData(): Promise<void> {
   await db.transaction(
     'rw',
     [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.outbox, db.media, db.meta],
@@ -108,8 +117,17 @@ export async function logout(): Promise<void> {
       await db.meta.delete('auth');
       await db.meta.delete('syncCursor'); // nächste Anmeldung startet mit vollständigem Pull
       await db.meta.delete('lastSyncAt');
+      await db.meta.delete('lastAccountId');
     },
   );
+}
+
+export async function logout(): Promise<void> {
+  // Explizites Abmelden: lokale Daten vollständig löschen. Sonst blieben auf einem
+  // geteilten Gerät die Karten/Notizen des Vorkontos sichtbar und – schlimmer – die noch
+  // nicht gesyncte Outbox würde beim nächsten Login unter fremdem Token hochgeladen.
+  // Synchronisierte Daten gehen nicht verloren: Login pullt ab Cursor 0 alles erneut.
+  await wipeLocalData();
   setState({ lastSyncAt: null });
 }
 
@@ -255,7 +273,10 @@ async function runSync(): Promise<void> {
     setState({ syncing: false, lastSyncAt: now, error: null });
   } catch (e) {
     if (e instanceof AuthError) {
-      await logout();
+      // Session abgelaufen (JWT hat 30 Tage TTL): NUR das Token verwerfen. Daten, Cursor
+      // und Outbox bleiben erhalten — beim erneuten Login mit demselben Konto wird die
+      // Outbox normal gepusht. Ein Wipe hier würde ungesyncte Arbeit vernichten.
+      await db.meta.delete('auth');
       setState({ syncing: false, error: 'Sitzung abgelaufen – bitte neu anmelden.' });
     } else {
       setState({ syncing: false, error: (e as Error).message || 'Sync fehlgeschlagen.' });

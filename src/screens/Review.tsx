@@ -161,7 +161,12 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       if (answeredIds.current.has(current.id)) return;
       answeredIds.current.add(current.id);
       // Optimistisch: Schlange sofort weiterschalten, DB-Write (vorab berechneter Plan) läuft write-behind.
-      void commitReview(current, schedule[grade]);
+      // Schlägt der Write fehl (z. B. Speicher-Quota), Karte wieder freigeben — sie kommt
+      // beim nächsten Nachladen der Schlange zurück, statt still verloren zu gehen.
+      commitReview(current, schedule[grade]).catch((err) => {
+        console.error('Bewertung konnte nicht gespeichert werden:', err);
+        answeredIds.current.delete(current.id);
+      });
       setDone((n) => n + 1);
       setQueue((q) => (q ?? []).slice(1));
     },
