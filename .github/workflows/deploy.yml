@@ -23,7 +23,9 @@ jobs:
 
       - run: npm ci
 
-      # Build validiert bei jedem Push (CI bleibt grün, auch ohne Cloudflare-Token).
+      # Lint + Tests + Build validieren bei jedem Push (CI bleibt grün, auch ohne Cloudflare-Token).
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
 
       # Auto-Deploy NUR, wenn ein Cloudflare-API-Token als Repo-Secret existiert.
