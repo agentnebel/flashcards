@@ -21,7 +21,9 @@ export function renderMarkdown(src: string): string {
 export function stripMarkdown(src: string): string {
   return src
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) / ![alt](src) → text/alt
-    .replace(/[*_~`>#]/g, '') // Betonungs-/Heading-/Code-/Zitat-Marker
+    .replace(/^#{1,6}\s+/gm, '') // Heading-Marker nur am Zeilenanfang ("C#" bleibt intakt)
+    .replace(/^>\s?/gm, '') // Zitat-Marker nur am Zeilenanfang
+    .replace(/[*_~`]/g, '') // Betonungs-/Code-Marker
     .replace(/^\s*[-+]\s+/gm, '') // Listen-Aufzählungszeichen
     .replace(/\s+/g, ' ')
     .trim();

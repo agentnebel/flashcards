@@ -9,7 +9,6 @@ export interface Deck {
   parentId: string | null;
   newPerDay: number;
   updatedAt: number;
-  usn: number; // -1 = lokal geändert, noch nicht gesynct
   deleted?: 0 | 1;
 }
 
@@ -27,7 +26,6 @@ export interface NoteType {
   templates: NoteTypeTemplate[];
   css: string;
   updatedAt: number;
-  usn: number;
 }
 
 export interface Note {
@@ -39,7 +37,6 @@ export interface Note {
   tags: string[];
   sortField: string;
   updatedAt: number;
-  usn: number;
   deleted?: 0 | 1;
 }
 
@@ -54,7 +51,6 @@ export interface Card {
   due: Date; // gespiegelt aus fsrs.due für Indexierung/Query
   suspended: 0 | 1;
   updatedAt: number;
-  usn: number;
   deleted?: 0 | 1;
 }
 
@@ -94,7 +90,6 @@ export interface Media {
   width: number;
   height: number;
   createdAt: number;
-  usn: number; // -1 = lokal geändert
   synced: 0 | 1; // 1 = bereits auf R2 hochgeladen
 }
 

@@ -132,7 +132,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
           : [{ name: 'Karte 1', qfmt: `{{${fields[0] ?? 'Vorderseite'}}}`, afmt: '{{FrontSide}}' }],
         css: model.css ?? '',
         updatedAt: now,
-        usn: -1,
       };
       modelToNt[mid] = ntId;
       modelFields[mid] = nt.fields;
@@ -166,7 +165,7 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
         const mime = mimeFromName(filename);
         const blob = new Blob([bytes], { type: mime });
         const { width, height } = mime.startsWith('image/') ? await imageSize(blob) : { width: 0, height: 0 };
-        const media: Media = { hash, blob, mime, size: blob.size, width, height, createdAt: now, usn: -1, synced: 0 };
+        const media: Media = { hash, blob, mime, size: blob.size, width, height, createdAt: now, synced: 0 };
         await db.media.add(media);
         mediaCount++;
       }
@@ -229,7 +228,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
             tags: [],
             sortField: fields[fieldNames[0]] ?? '',
             updatedAt: now,
-            usn: -1,
           };
           const cards: Card[] = generateCards(note, nt).map((s) => {
             const fsrs = createEmptyCard(new Date());
@@ -244,7 +242,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
               due: fsrs.due,
               suspended: 0,
               updatedAt: now,
-              usn: -1,
             };
           });
           await db.notes.add(note);

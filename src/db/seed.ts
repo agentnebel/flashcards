@@ -22,7 +22,6 @@ export async function ensureSeed(): Promise<void> {
         ],
         css: DEFAULT_CSS,
         updatedAt: now,
-        usn: -1,
       },
       {
         id: 'nt-basic-reversed',
@@ -35,7 +34,6 @@ export async function ensureSeed(): Promise<void> {
         ],
         css: DEFAULT_CSS,
         updatedAt: now,
-        usn: -1,
       },
       {
         id: 'nt-cloze',
@@ -45,7 +43,6 @@ export async function ensureSeed(): Promise<void> {
         templates: [{ name: 'Cloze', qfmt: '{{cloze:Text}}', afmt: '{{cloze:Text}}<hr>{{Extra}}' }],
         css: DEFAULT_CSS,
         updatedAt: now,
-        usn: -1,
       },
     ];
     await db.noteTypes.bulkAdd(types);
@@ -58,7 +55,6 @@ export async function ensureSeed(): Promise<void> {
       parentId: null,
       newPerDay: 20,
       updatedAt: now,
-      usn: -1,
     };
     await db.decks.add(deck);
   }

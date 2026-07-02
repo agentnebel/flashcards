@@ -23,7 +23,7 @@ export async function setDesiredRetention(v: number): Promise<void> {
 export async function createDeck(name: string): Promise<string> {
   const id = uuid();
   const now = Date.now();
-  const deck: Deck = { id, name, parentId: null, newPerDay: 20, updatedAt: now, usn: -1 };
+  const deck: Deck = { id, name, parentId: null, newPerDay: 20, updatedAt: now };
   await db.transaction('rw', db.decks, db.outbox, async () => {
     await db.decks.add(deck);
     await db.outbox.add({ op: 'upsert', entity: 'deck', entityId: id, payload: deck, createdAt: now });
@@ -51,7 +51,6 @@ export async function addNote(params: {
     tags: params.tags ?? [],
     sortField,
     updatedAt: now,
-    usn: -1,
   };
   const cards: Card[] = generateCards(note, nt).map((s) => {
     const fsrs = createEmptyCard(new Date());
@@ -66,7 +65,6 @@ export async function addNote(params: {
       due: fsrs.due,
       suspended: 0,
       updatedAt: now,
-      usn: -1,
     };
   });
   await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
@@ -83,7 +81,7 @@ export async function renameDeck(deckId: string, name: string): Promise<void> {
   const deck = await db.decks.get(deckId);
   if (!deck) return;
   const now = Date.now();
-  const updated: Deck = { ...deck, name, updatedAt: now, usn: -1 };
+  const updated: Deck = { ...deck, name, updatedAt: now };
   await db.transaction('rw', db.decks, db.outbox, async () => {
     await db.decks.put(updated);
     await db.outbox.add({ op: 'upsert', entity: 'deck', entityId: deckId, payload: updated, createdAt: now });
@@ -122,7 +120,7 @@ export async function updateNote(
   if (!nt) return;
   const now = Date.now();
   const deckId = newDeckId ?? note.deckId;
-  const updated: Note = { ...note, fields, noteTypeId: resolvedNoteTypeId, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now, usn: -1 };
+  const updated: Note = { ...note, fields, noteTypeId: resolvedNoteTypeId, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now };
   const existingCards = await db.cards.where('noteId').equals(noteId).toArray();
 
   if (resolvedNoteTypeId !== note.noteTypeId) {
@@ -141,7 +139,6 @@ export async function updateNote(
         due: fsrs.due,
         suspended: 0,
         updatedAt: now,
-        usn: -1 as const,
       };
     });
     await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
@@ -158,7 +155,7 @@ export async function updateNote(
     });
   } else {
     // Gleichbleibender Notiztyp: Felder + Deck auf bestehenden Karten aktualisieren.
-    const updatedCards = existingCards.map((c) => ({ ...c, deckId, updatedAt: now, usn: -1 as const }));
+    const updatedCards = existingCards.map((c) => ({ ...c, deckId, updatedAt: now }));
     await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
       await db.notes.put(updated);
       await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
@@ -218,7 +215,6 @@ export async function importNotes(params: {
           tags: [],
           sortField: fields[nt.fields[0]] ?? '',
           updatedAt: now,
-          usn: -1,
         };
         const cards: Card[] = generateCards(note, nt).map((s) => {
           const fsrs = createEmptyCard(new Date());
@@ -233,7 +229,6 @@ export async function importNotes(params: {
             due: fsrs.due,
             suspended: 0,
             updatedAt: now,
-            usn: -1,
           };
         });
         await db.notes.add(note);
@@ -354,7 +349,7 @@ export async function commitReview(card: Card, item: RecordLogItem): Promise<voi
   const next = item.card;
   const log = item.log;
   const reviewedAt = log.review instanceof Date ? log.review.getTime() : Date.now();
-  const updated: Card = { ...card, fsrs: next, due: next.due, updatedAt: reviewedAt, usn: -1 };
+  const updated: Card = { ...card, fsrs: next, due: next.due, updatedAt: reviewedAt };
   const rev: RevlogEntry = {
     id: uuid(),
     cardId: card.id,
@@ -379,7 +374,7 @@ export async function commitReview(card: Card, item: RecordLogItem): Promise<voi
 export async function setSuspended(cardId: string, suspended: 0 | 1): Promise<void> {
   const card = await db.cards.get(cardId);
   if (!card) return;
-  const updated = { ...card, suspended, updatedAt: Date.now(), usn: -1 };
+  const updated = { ...card, suspended, updatedAt: Date.now() };
   await db.cards.put(updated);
   await db.outbox.add({ op: 'upsert', entity: 'card', entityId: cardId, payload: updated, createdAt: Date.now() });
 }
@@ -464,8 +459,8 @@ interface BackupFile {
 
 // Spiegelt ein Backup zurück in die lokale DB. JSON serialisiert Date→String, daher
 // werden alle Datumsfelder (due / fsrs.due / fsrs.last_review / revlog.due) revived.
-// Merge-Semantik: bulkPut (gleiche id überschreibt). Schreibt NICHT in die Outbox – ein
-// Restore ist lokal; zum Sync müssen die Einträge danach erneut bearbeitet werden.
+// Merge-Semantik: bulkPut (gleiche id überschreibt). Alle Einträge werden in die Outbox
+// gestellt, damit ein Restore beim nächsten Sync auch auf die anderen Geräte gelangt.
 export async function importBackup(json: string): Promise<{ decks: number; notes: number; cards: number; media: number }> {
   const data = JSON.parse(json) as BackupFile;
   if (!data || typeof data !== 'object') throw new Error('Ungültige Backup-Datei');
@@ -501,7 +496,6 @@ export async function importBackup(json: string): Promise<{ decks: number; notes
       width: m.width ?? 0,
       height: m.height ?? 0,
       createdAt: Date.now(),
-      usn: -1,
       synced: 0,
     });
   }

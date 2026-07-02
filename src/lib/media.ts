@@ -139,7 +139,6 @@ export async function storeImage(input: Blob): Promise<string> {
       width,
       height,
       createdAt: Date.now(),
-      usn: -1,
       synced: 0,
     };
     await db.media.add(media);

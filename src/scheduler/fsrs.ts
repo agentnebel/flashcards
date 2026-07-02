@@ -15,18 +15,18 @@ export function makeScheduler(requestRetention = 0.9): FSRS {
   );
 }
 
-// Menschlich lesbares Intervall zwischen jetzt und Fälligkeit.
+// Menschlich lesbares Intervall zwischen jetzt und Fälligkeit (deutsche Einheiten).
 export function fmtInterval(due: Date, now: Date = new Date()): string {
   const ms = due.getTime() - now.getTime();
   if (ms <= 0) return 'fällig';
   const min = ms / 60000;
   if (min < 60) return `${Math.max(1, Math.round(min))} min`;
   const h = min / 60;
-  // Vor dem Vergleich runden, damit z. B. 23,6 h als "1 d" statt "24 h" erscheint.
-  if (Math.round(h) < 24) return `${Math.round(h)} h`;
+  // Vor dem Vergleich runden, damit z. B. 23,6 h als "1 T" statt "24 Std" erscheint.
+  if (Math.round(h) < 24) return `${Math.round(h)} Std`;
   const d = h / 24;
-  if (Math.round(d) < 30) return `${Math.round(d)} d`;
+  if (Math.round(d) < 30) return `${Math.round(d)} T`;
   const mo = d / 30;
-  if (Math.round(mo) < 12) return `${Math.round(mo)} mo`;
-  return `${(d / 365).toFixed(1)} y`;
+  if (Math.round(mo) < 12) return `${Math.round(mo)} Mon`;
+  return `${(d / 365).toFixed(1).replace('.', ',')} J`;
 }
