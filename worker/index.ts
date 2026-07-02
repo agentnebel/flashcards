@@ -10,6 +10,9 @@ export interface Env {
   // R2 ist noch nicht aktiviert -> Binding ist in wrangler.jsonc auskommentiert und
   // zur Laufzeit undefined. Handler müssen das abfangen (503). Optional getypt.
   MEDIA?: R2Bucket;
+  // Rate-Limiting-Binding (wrangler.jsonc "unsafe"). Optional getypt, damit Umgebungen
+  // ohne Binding (ältere lokale Setups) nicht crashen — dann greift kein Limit.
+  AUTH_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   JWT_SECRET: string;
 }
 

@@ -100,8 +100,19 @@ interface Creds {
   password?: string;
 }
 
+// Bruteforce-/Massenregistrierungs-Schutz: 10 Auth-Versuche pro IP und Minute
+// (Rate-Limiting-Binding, siehe wrangler.jsonc). Gibt bei Überschreitung 429 zurück.
+async function rateLimited(req: IRequest, env: Env): Promise<Response | null> {
+  if (!env.AUTH_LIMITER) return null;
+  const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const { success } = await env.AUTH_LIMITER.limit({ key: ip });
+  return success ? null : error(429, 'Zu viele Versuche – bitte kurz warten.');
+}
+
 export async function handleRegister(req: IRequest, env: Env): Promise<Response> {
   if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
+  const limited = await rateLimited(req, env);
+  if (limited) return limited;
   const creds = (await req.json().catch(() => ({}))) as Creds;
   const email = normalizeEmail(creds.email);
   const password = creds.password ?? '';
@@ -121,6 +132,8 @@ export async function handleRegister(req: IRequest, env: Env): Promise<Response>
 
 export async function handleLogin(req: IRequest, env: Env): Promise<Response> {
   if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
+  const limited = await rateLimited(req, env);
+  if (limited) return limited;
   const creds = (await req.json().catch(() => ({}))) as Creds;
   const email = normalizeEmail(creds.email);
   const password = creds.password ?? '';

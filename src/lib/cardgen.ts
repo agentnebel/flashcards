@@ -1,5 +1,6 @@
 import type { Note, NoteType } from '../db/db';
 import { renderMarkdown } from './markdown';
+import { sanitizeHtml } from './sanitize';
 
 export interface CardSpec {
   templateOrd: number;
@@ -75,7 +76,9 @@ function clozeRender(text: string, num: number, reveal: boolean): string {
   );
 }
 
-// Rendert Vorder- und Rückseite einer konkreten Karte.
+// Rendert Vorder- und Rückseite einer konkreten Karte. Das fertige HTML wird IMMER
+// sanitisiert (DOMPurify): Felder UND Templates können aus fremden .apkg-Dateien oder dem
+// Sync stammen — eingebettetes Skript (z. B. <img onerror=…>) darf nie im App-Origin laufen.
 export function renderCard(
   note: Note,
   nt: NoteType,
@@ -88,13 +91,15 @@ export function renderCard(
     // Cloze-Lücken zuerst zu <span class="cloze">…</span> auflösen, dann Markdown anwenden.
     // Marked reicht die fertigen Spans durch und rendert Markdown im umgebenden Text.
     return {
-      front: renderMarkdown(clozeRender(text, num, false)),
-      back: renderMarkdown(clozeRender(text, num, true)) + (extra ? `<hr>${renderMarkdown(extra)}` : ''),
+      front: sanitizeHtml(renderMarkdown(clozeRender(text, num, false))),
+      back: sanitizeHtml(
+        renderMarkdown(clozeRender(text, num, true)) + (extra ? `<hr>${renderMarkdown(extra)}` : ''),
+      ),
     };
   }
   const tmpl = nt.templates[card.templateOrd] ?? nt.templates[0];
   const front = fill(tmpl.qfmt, note.fields, renderMarkdown);
   // {{FrontSide}} zuerst durch die gerenderte Vorderseite ersetzen, dann übrige Felder füllen.
   const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, front), note.fields, renderMarkdown);
-  return { front, back };
+  return { front: sanitizeHtml(front), back: sanitizeHtml(back) };
 }

@@ -5,7 +5,10 @@ import type { Env } from './index';
 type AuthedRequest = IRequest & { userId: string };
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
-const MAX_EXISTS_HASHES = 500;
+const MAX_USER_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB Gesamtspeicher pro Konto
+// Jeder R2-head() zählt als Subrequest (Free-Plan-Limit: 50/Request) — deshalb deutlich
+// weniger Hashes pro Anfrage zulassen; der Client chunkt entsprechend.
+const MAX_EXISTS_HASHES = 40;
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', buf);
@@ -26,6 +29,15 @@ export async function handleMediaUpload(req: AuthedRequest, env: Env): Promise<R
   const buf = await req.arrayBuffer();
   if (buf.byteLength === 0) return error(400, 'Leerer Upload');
   if (buf.byteLength > MAX_UPLOAD_BYTES) return error(413, 'Datei zu groß (max 15 MB)');
+
+  // Speicher-Quota pro Konto: ohne Obergrenze könnte ein einzelnes (ggf. massenhaft
+  // registriertes) Konto R2 unbegrenzt füllen — reines Kostenrisiko, kein Featureverlust.
+  const usage = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS used FROM media WHERE user_id = ?')
+    .bind(req.userId)
+    .first<{ used: number }>();
+  if ((usage?.used ?? 0) + buf.byteLength > MAX_USER_STORAGE_BYTES) {
+    return error(413, 'Speicherlimit erreicht (500 MB pro Konto)');
+  }
 
   const hash = await sha256Hex(buf);
   const key = `${req.userId}/${hash}`;

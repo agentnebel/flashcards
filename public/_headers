@@ -1,0 +1,11 @@
+# Security-Header für die Static Assets (Workers Static Assets werten _headers aus).
+# Die CSP ist Defense-in-Depth zusätzlich zum DOMPurify-Sanitizing der Karteninhalte:
+# selbst wenn HTML durchrutscht, blockt sie Inline-Event-Handler und fremde Skripte.
+#   - 'wasm-unsafe-eval': sql.js kompiliert WASM für den .apkg-Import
+#   - style-src 'unsafe-inline': React-Inline-Styles (style-Attribute)
+#   - img-src blob: data:: lokale Medien laufen über Object-URLs / eingebettete Bilder
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

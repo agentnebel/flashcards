@@ -28,5 +28,19 @@
     { "binding": "MEDIA", "bucket_name": "flashcards-media" }
   ]
 
+  // Rate-Limiting für /api/auth/* (Bruteforce-/Massenregistrierungs-Schutz):
+  // 10 Versuche pro IP und 60 s. "unsafe" ist Cloudflares Namensraum für das
+  // Rate-Limiting-Binding (offene Beta), nicht etwas Unsicheres.
+  ,"unsafe": {
+    "bindings": [
+      {
+        "name": "AUTH_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": { "limit": 10, "period": 60 }
+      }
+    ]
+  }
+
   // Secret: `wrangler secret put JWT_SECRET`
 }

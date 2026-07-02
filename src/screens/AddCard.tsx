@@ -6,6 +6,7 @@ import { db } from '../db/db';
 import { addNote, updateNote } from '../db/api';
 import { mediaUrl, resolveMediaHtml, storeImage } from '../lib/media';
 import { renderMarkdown } from '../lib/markdown';
+import { sanitizeHtml } from '../lib/sanitize';
 
 // Findet alle flashmedia:HASH-Referenzen in einem Feldtext (für die Thumbnail-Leiste).
 // Tolerant gegenüber Attributen vor src (z. B. <img alt="x" src="flashmedia:…">), wie sie
@@ -271,7 +272,9 @@ function MarkdownPreview({ source }: { source: string }) {
   const [html, setHtml] = useState('');
   useEffect(() => {
     let alive = true;
-    resolveMediaHtml(renderMarkdown(source)).then((h) => {
+    // sanitizeHtml: auch die Vorschau rendert potenziell fremdes HTML (Editieren
+    // importierter Notizen) — gleiche Härtung wie im Review.
+    resolveMediaHtml(sanitizeHtml(renderMarkdown(source))).then((h) => {
       if (alive) setHtml(h);
     });
     return () => {
