@@ -23,52 +23,68 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
   if (mutations.length > 5000) return error(413, 'Zu viele Mutationen pro Batch');
 
   const now = Date.now();
+
+  // Validierung vorab: nur bekannte Entitäten (verhindert, dass ein bösartiger/fehlerhafter
+  // Client Fremd-Entitäten in den Feed schreibt), Revlog append-only (keine Deletes),
+  // Upsert-Payload muss zur entityId passen (Clients indexieren lokal auf payload.id;
+  // eine Abweichung würde LWW-/Dedup-Prüfungen auf anderen Geräten umgehen).
+  const valid = mutations.filter((m) => {
+    if (!m || !m.entity || !m.entityId || (m.op !== 'upsert' && m.op !== 'delete')) return false;
+    if (!ALLOWED_ENTITIES.has(m.entity)) return false;
+    if (m.entity === 'revlog' && m.op === 'delete') return false;
+    if (m.op === 'upsert' && m.payload && typeof m.payload === 'object') {
+      const id = (m.payload as Record<string, unknown>).id;
+      if (typeof id === 'string' && id !== m.entityId) return false;
+    }
+    return true;
+  });
+
   let cursor = 0;
 
-  for (const m of mutations) {
-    if (!m || !m.entity || !m.entityId || (m.op !== 'upsert' && m.op !== 'delete')) continue;
-    // Nur bekannte Entitäten zulassen — verhindert, dass ein bösartiger/fehlerhafter Client
-    // Fremd-Entitäten in den Feed schreibt, die auf anderen Geräten Müll anrichten.
-    if (!ALLOWED_ENTITIES.has(m.entity)) continue;
-    // Revlog ist append-only: Löschungen werden nicht über den Sync propagiert.
-    if (m.entity === 'revlog' && m.op === 'delete') continue;
-    const isDelete = m.op === 'delete';
-    const payloadObj = !isDelete && m.payload && typeof m.payload === 'object' ? (m.payload as Record<string, unknown>) : null;
-    // Upsert-Payload muss zur entityId passen (Clients indexieren lokal auf payload.id;
-    // eine Abweichung würde LWW-/Dedup-Prüfungen auf anderen Geräten umgehen).
-    if (payloadObj && typeof payloadObj.id === 'string' && payloadObj.id !== m.entityId) continue;
-    // Konfliktauflösung serverautoritativ per Inhalts-updatedAt (statt reiner Ankunftsreihenfolge).
-    const clientUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : now;
-
-    // Atomar: change_log + sync_objects in EINEM D1-Batch (eine Transaktion). Verhindert,
-    // dass eine seq im change_log ohne passenden sync_objects-Stand zurückbleibt (Datenverlust
-    // für andere Geräte). seq wird via last_insert_rowid() aus dem change_log-Insert übernommen.
-    const res = await env.DB.batch([
-      env.DB.prepare(
-        'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',
-      ).bind(req.userId, m.entity, m.entityId, m.op, now),
-      env.DB.prepare(
-        `INSERT INTO sync_objects (user_id, entity, entity_id, payload, deleted, seq, updated_at)
-         VALUES (?,?,?,?,?, last_insert_rowid(), ?)
-         ON CONFLICT(user_id, entity, entity_id) DO UPDATE SET
-           payload    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.payload ELSE sync_objects.payload END,
-           deleted    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.deleted ELSE sync_objects.deleted END,
-           updated_at = MAX(excluded.updated_at, sync_objects.updated_at),
-           seq        = excluded.seq`, // seq immer hochzählen → gewinnende Version propagiert an alle Geräte
-      ).bind(
-        req.userId,
-        m.entity,
-        m.entityId,
-        isDelete ? null : JSON.stringify(m.payload ?? null),
-        isDelete ? 1 : 0,
-        clientUpdatedAt,
-      ),
-    ]);
-    const seq = (res[0]?.results?.[0] as { seq?: number } | undefined)?.seq ?? 0;
-    cursor = Math.max(cursor, seq);
+  // Gebündelte D1-Batches statt eines Batches je Mutation: Jeder batch()-Aufruf zählt als
+  // EIN Subrequest (Free-Plan-Limit: 50/Request) — ein 500er-Push-Chunk mit Einzel-Batches
+  // würde das Limit sprengen und große Importe live abbrechen. Pro Mutation bleiben es zwei
+  // Statements: change_log-Insert liefert die seq (last_insert_rowid() gilt innerhalb der
+  // sequentiell laufenden Batch-Transaktion für das unmittelbar vorangehende Insert), das
+  // sync_objects-Upsert übernimmt sie. Beides zusammen atomar — keine seq ohne Objektstand.
+  const BATCH = 100; // 200 Statements je Batch, bleibt deutlich unter den D1-Limits
+  for (let i = 0; i < valid.length; i += BATCH) {
+    const slice = valid.slice(i, i + BATCH);
+    const stmts = slice.flatMap((m) => {
+      const isDelete = m.op === 'delete';
+      const payloadObj = !isDelete && m.payload && typeof m.payload === 'object' ? (m.payload as Record<string, unknown>) : null;
+      // Konfliktauflösung serverautoritativ per Inhalts-updatedAt (statt reiner Ankunftsreihenfolge).
+      const clientUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : now;
+      return [
+        env.DB.prepare(
+          'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',
+        ).bind(req.userId, m.entity, m.entityId, m.op, now),
+        env.DB.prepare(
+          `INSERT INTO sync_objects (user_id, entity, entity_id, payload, deleted, seq, updated_at)
+           VALUES (?,?,?,?,?, last_insert_rowid(), ?)
+           ON CONFLICT(user_id, entity, entity_id) DO UPDATE SET
+             payload    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.payload ELSE sync_objects.payload END,
+             deleted    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.deleted ELSE sync_objects.deleted END,
+             updated_at = MAX(excluded.updated_at, sync_objects.updated_at),
+             seq        = excluded.seq`, // seq immer hochzählen → gewinnende Version propagiert an alle Geräte
+        ).bind(
+          req.userId,
+          m.entity,
+          m.entityId,
+          isDelete ? null : JSON.stringify(m.payload ?? null),
+          isDelete ? 1 : 0,
+          clientUpdatedAt,
+        ),
+      ];
+    });
+    const res = await env.DB.batch(stmts);
+    for (let j = 0; j < slice.length; j++) {
+      const seq = (res[j * 2]?.results?.[0] as { seq?: number } | undefined)?.seq ?? 0;
+      cursor = Math.max(cursor, seq);
+    }
   }
 
-  return json({ cursor, applied: mutations.length });
+  return json({ cursor, applied: valid.length });
 }
 
 export async function handlePull(req: AuthedRequest, env: Env): Promise<Response> {

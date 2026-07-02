@@ -27,30 +27,33 @@ export async function uploadPendingMedia(
   let failed = 0;
 
   // Schritt 1 (optional): bereits vorhandene Hashes ermitteln und sofort als synced markieren.
-  const stillPending: Media[] = [];
+  // In 40er-Chunks: der Server prüft jeden Hash per R2-head() (= 1 Subrequest, Free-Plan-
+  // Limit 50/Request) und lehnt größere Listen mit 413 ab.
+  const EXISTS_CHUNK = 40;
+  const have = new Set<string>();
   try {
-    const res = await fetch(`${baseUrl}/api/media/exists`, {
-      method: 'POST',
-      headers: { ...auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hashes: pending.map((m) => m.hash) }),
-    });
-    if (res.ok) {
+    for (let i = 0; i < pending.length; i += EXISTS_CHUNK) {
+      const chunk = pending.slice(i, i + EXISTS_CHUNK);
+      const res = await fetch(`${baseUrl}/api/media/exists`, {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hashes: chunk.map((m) => m.hash) }),
+      });
+      if (!res.ok) break; // exists ist nur eine Optimierung – Rest wird regulär hochgeladen
       const data = (await res.json()) as { have?: string[]; missing?: string[] };
-      const have = new Set(data.have ?? []);
-      for (const m of pending) {
-        if (have.has(m.hash)) {
-          await markSynced(m.hash);
-          uploaded += 1;
-        } else {
-          stillPending.push(m);
-        }
-      }
-    } else {
-      stillPending.push(...pending);
+      for (const h of data.have ?? []) have.add(h);
     }
   } catch {
     // exists ist nur eine Optimierung – bei Fehler einfach alle hochladen versuchen.
-    stillPending.push(...pending);
+  }
+  const stillPending: Media[] = [];
+  for (const m of pending) {
+    if (have.has(m.hash)) {
+      await markSynced(m.hash);
+      uploaded += 1;
+    } else {
+      stillPending.push(m);
+    }
   }
 
   // Schritt 2: Restliche Blobs hochladen.
@@ -117,7 +120,6 @@ export async function ensureMediaForHtml(baseUrl: string, token: string, html: s
           width,
           height,
           createdAt: Date.now(),
-          usn: -1,
           synced: 1, // kam vom Server, gilt als synchronisiert
         };
         // Nur einfügen, wenn nicht zwischenzeitlich vorhanden (Dedup via Primärschlüssel).
