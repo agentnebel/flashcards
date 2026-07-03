@@ -132,8 +132,8 @@ function CsvSection({
     setBusy(true);
     setResult(null);
     try {
-      const n = await importNotes({ deckId, noteTypeId, rows: parsed.rows, fieldMap, hasHeader });
-      setResult(`${n} Karte(n) importiert.`);
+      const r = await importNotes({ deckId, noteTypeId, rows: parsed.rows, fieldMap, hasHeader });
+      setResult(`${r.notes} Notiz(en), ${r.cards} Karte(n) importiert.`);
       setText('');
     } catch (err) {
       setResult('Fehler: ' + ((err as Error).message || 'Import fehlgeschlagen'));

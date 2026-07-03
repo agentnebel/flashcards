@@ -1,8 +1,8 @@
 import { db, type Card, type Deck, type Media, type Note, type NoteType, type OutboxItem, type RevlogEntry } from './db';
-import { createEmptyCard, makeScheduler } from '../scheduler/fsrs';
+import { makeScheduler } from '../scheduler/fsrs';
 import type { RecordLog, RecordLogItem } from 'ts-fsrs';
-import { generateCards } from '../lib/cardgen';
 import { uuid } from './ids';
+import { freshCardsForNote, reconcileCardsForNote } from './cardReconcile';
 
 // FSRS verlangt request_retention in (0,1]; defensiv auf einen sinnvollen Bereich klemmen,
 // damit ein korrupter/aus dem Sync stammender Wert den Scheduler nicht crasht.
@@ -52,21 +52,7 @@ export async function addNote(params: {
     sortField,
     updatedAt: now,
   };
-  const cards: Card[] = generateCards(note, nt).map((s) => {
-    const fsrs = createEmptyCard(new Date());
-    return {
-      id: uuid(),
-      noteId: id,
-      deckId: params.deckId,
-      noteTypeId: nt.id,
-      templateOrd: s.templateOrd,
-      clozeNum: s.clozeNum,
-      fsrs,
-      due: fsrs.due,
-      suspended: 0,
-      updatedAt: now,
-    };
-  });
+  const cards = freshCardsForNote(note, nt, now);
   await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
     await db.notes.add(note);
     await db.cards.bulkAdd(cards);
@@ -126,21 +112,7 @@ export async function updateNote(
   if (resolvedNoteTypeId !== note.noteTypeId) {
     // Notiztyp gewechselt: alte Karten löschen + neue nach neuem Template generieren.
     // FSRS-Fortschritt der alten Karten geht verloren (analog zu Anki).
-    const newCards: Card[] = generateCards(updated, nt).map((s) => {
-      const fsrs = createEmptyCard(new Date());
-      return {
-        id: uuid(),
-        noteId,
-        deckId,
-        noteTypeId: nt.id,
-        templateOrd: s.templateOrd,
-        clozeNum: s.clozeNum,
-        fsrs,
-        due: fsrs.due,
-        suspended: 0,
-        updatedAt: now,
-      };
-    });
+    const newCards = freshCardsForNote(updated, nt, now);
     await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
       await db.notes.put(updated);
       await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
@@ -154,12 +126,15 @@ export async function updateNote(
       }
     });
   } else {
-    // Gleichbleibender Notiztyp: Felder + Deck auf bestehenden Karten aktualisieren.
-    const updatedCards = existingCards.map((c) => ({ ...c, deckId, updatedAt: now }));
+    const cardChanges = reconcileCardsForNote(updated, nt, existingCards, now);
     await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
       await db.notes.put(updated);
       await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
-      for (const c of updatedCards) {
+      for (const c of cardChanges.remove) {
+        await db.cards.delete(c.id);
+        await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
+      }
+      for (const c of cardChanges.upsert) {
         await db.cards.put(c);
         await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
       }
@@ -188,11 +163,12 @@ export async function importNotes(params: {
   rows: string[][];
   fieldMap: number[]; // Spaltenindex je Notiztyp-Feld, -1 = leer lassen
   hasHeader: boolean;
-}): Promise<number> {
+}): Promise<{ notes: number; cards: number }> {
   const nt = await db.noteTypes.get(params.noteTypeId);
   if (!nt) throw new Error('Notiztyp nicht gefunden');
   const dataRows = params.hasHeader ? params.rows.slice(1) : params.rows;
-  let imported = 0;
+  let importedNotes = 0;
+  let importedCards = 0;
   const CHUNK = 200;
   for (let start = 0; start < dataRows.length; start += CHUNK) {
     const slice = dataRows.slice(start, start + CHUNK);
@@ -216,32 +192,19 @@ export async function importNotes(params: {
           sortField: fields[nt.fields[0]] ?? '',
           updatedAt: now,
         };
-        const cards: Card[] = generateCards(note, nt).map((s) => {
-          const fsrs = createEmptyCard(new Date());
-          return {
-            id: uuid(),
-            noteId: id,
-            deckId: params.deckId,
-            noteTypeId: nt.id,
-            templateOrd: s.templateOrd,
-            clozeNum: s.clozeNum,
-            fsrs,
-            due: fsrs.due,
-            suspended: 0,
-            updatedAt: now,
-          };
-        });
+        const cards = freshCardsForNote(note, nt, now);
         await db.notes.add(note);
         await db.cards.bulkAdd(cards);
         await db.outbox.add({ op: 'upsert', entity: 'note', entityId: id, payload: note, createdAt: now });
         for (const c of cards) {
           await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
         }
-        imported++;
+        importedNotes++;
+        importedCards += cards.length;
       }
     });
   }
-  return imported;
+  return { notes: importedNotes, cards: importedCards };
 }
 
 // Lern-Streak: aufeinanderfolgende lokale Tage mit mindestens einem Review.
