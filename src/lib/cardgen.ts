@@ -16,12 +16,16 @@ export function clozeNumbers(text: string): number[] {
   return [...set].sort((a, b) => a - b);
 }
 
+const MEANINGFUL_FRONT_TAG_RE = /<(?:img|audio|video|svg|canvas|object|embed)\b/i;
+
 // Prüft, ob ein Vorderseiten-Template für die gegebenen Feldwerte etwas anderes als Tags/
-// Whitespace ergäbe. Anki erzeugt pro Template nur dann eine Karte, wenn dessen gerenderte
-// Vorderseite nicht leer ist — sonst entstünde eine leere, unbeantwortbare Karte (z. B. beim
-// "optional umgekehrte Karte"-Template, solange das Umkehr-Flag-Feld leer ist).
+// Whitespace ergäbe. Medien-Tags zählen als Inhalt: eine Bild-only-Karte ist beantwortbar.
+// Anki erzeugt pro Template nur dann eine Karte, wenn dessen gerenderte Vorderseite nicht leer
+// ist — sonst entstünde eine leere, unbeantwortbare Karte (z. B. beim "optional umgekehrte
+// Karte"-Template, solange das Umkehr-Flag-Feld leer ist).
 function frontHasContent(qfmt: string, fields: Record<string, string>): boolean {
-  return fill(qfmt, fields).replace(/<[^>]*>/g, '').trim() !== '';
+  const front = fill(qfmt, fields);
+  return MEANINGFUL_FRONT_TAG_RE.test(front) || front.replace(/<[^>]*>/g, '').trim() !== '';
 }
 
 // Aus einer Notiz werden 1..n Karten erzeugt (Templates bzw. Cloze-Deletions).

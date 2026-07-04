@@ -57,16 +57,20 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   // verhindert, dass ein Reload eine gerade (write-behind) beantwortete Karte zurückholt,
   // bevor der DB-Write committet ist.
   const answeredIds = useRef<Set<string>>(new Set());
+  // Lokal kaputte/orphan Karten (fehlende Note oder NoteType) pro Session merken. Sonst lädt
+  // die Empty-Queue-Logik dieselbe Karte sofort wieder und der Screen skippt im Kreis.
+  const skippedIds = useRef<Set<string>>(new Set());
 
   const reload = useCallback(async () => {
     if (!deckId) return;
     if (cram) {
       // Cram: einmal ALLE Karten laden; kein answeredIds-Filter (Re-Queue erlaubt Wiedersehen).
-      setQueue(await getCramQueue(deckId));
+      const q = await getCramQueue(deckId);
+      setQueue(q.filter((c) => !skippedIds.current.has(c.id)));
       return;
     }
     const q = await getStudyQueue(deckId);
-    setQueue(q.filter((c) => !answeredIds.current.has(c.id)));
+    setQueue(q.filter((c) => !answeredIds.current.has(c.id) && !skippedIds.current.has(c.id)));
   }, [deckId, cram]);
 
   useEffect(() => {
@@ -87,7 +91,9 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       setQueue((q) => {
         const cur = q ?? [];
         const existing = new Set(cur.map((c) => c.id));
-        const toAdd = fresh.filter((c) => !existing.has(c.id) && !answeredIds.current.has(c.id));
+        const toAdd = fresh.filter(
+          (c) => !existing.has(c.id) && !answeredIds.current.has(c.id) && !skippedIds.current.has(c.id),
+        );
         return toAdd.length ? [...cur, ...toAdd] : cur;
       });
     }, 20_000);
@@ -153,7 +159,8 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         // Notiztyp aus dem Sync noch nicht angekommen) — Karte überspringen statt die
         // Session mit einem dauerhaften "Lädt…" zu blockieren.
         console.warn('Karte ohne lokale Notiz/Notiztyp übersprungen:', current.id);
-        setQueue((q) => (q ?? []).slice(1));
+        skippedIds.current.add(current.id);
+        setQueue((q) => (q ?? []).filter((c) => c.id !== current.id));
         return;
       }
       setRendered(r);
@@ -319,7 +326,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
             <p>✅ Alle Karten durchgegangen!</p>
             <button
               className="btn primary"
-              onClick={() => { setDone(0); answeredIds.current.clear(); reload(); }}
+              onClick={() => { setDone(0); answeredIds.current.clear(); skippedIds.current.clear(); reload(); }}
             >
               Noch einmal von vorn
             </button>

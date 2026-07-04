@@ -62,6 +62,10 @@ describe('generateCards', () => {
     const specs = generateCards(makeNote({ Front: 'a', Back: 'b' }), nt);
     expect(specs).toEqual([]);
   });
+  it('Standard: Bild-only Vorderseite zählt als Inhalt', () => {
+    const specs = generateCards(makeNote({ Front: '<img src="flashmedia:abc123">', Back: 'b' }), standardNt);
+    expect(specs).toEqual([{ templateOrd: 0, clozeNum: null }]);
+  });
   it('Standard: nur Templates mit Inhalt werden erzeugt (optionale Rückwärtskarte)', () => {
     const nt: NoteType = {
       ...standardNt,
