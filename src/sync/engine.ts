@@ -6,7 +6,8 @@
 
 import type { Table } from 'dexie';
 import { db } from '../db/db';
-import type { Card, Note, RevlogEntry } from '../db/db';
+import type { Card, RevlogEntry } from '../db/db';
+import { ensureSeed } from '../db/seed';
 import { ensureMediaForHtml, uploadPendingMedia } from './media';
 
 type Row = Record<string, unknown>;
@@ -83,6 +84,16 @@ async function authResult(res: Response): Promise<Auth> {
   // (nie gesynct) bleiben lokale Karten erhalten und werden hochgeladen (wie beworben).
   const prev = await db.meta.get('lastAccountId');
   if (typeof prev?.value === 'string' && prev.value !== user.id) {
+    // Destruktiv (löscht lokale, ggf. ungesyncte Daten) — vorher bestätigen lassen, statt
+    // z. B. einen Vertipper bei der E-Mail oder ein falsches gespeichertes Passwort auf
+    // einem Gerät mit noch offenen Änderungen stillschweigend Daten vernichten zu lassen.
+    const proceed =
+      typeof window === 'undefined' ||
+      window.confirm(
+        'Dieses Konto unterscheidet sich vom zuletzt auf diesem Gerät genutzten. ' +
+          'Lokale, noch nicht synchronisierte Änderungen werden dabei gelöscht. Fortfahren?',
+      );
+    if (!proceed) throw new Error('Anmeldung abgebrochen (anderes Konto).');
     await wipeLocalData();
   }
   await db.meta.put({ key: 'lastAccountId', value: user.id });
@@ -120,6 +131,9 @@ async function wipeLocalData(): Promise<void> {
       await db.meta.delete('lastAccountId');
     },
   );
+  // Ohne dies bliebe die App bis zum nächsten harten Reload ohne Standard-Deck/-Notiztypen
+  // (z. B. "Hinzufügen" dauerhaft unbenutzbar, weil kein Notiztyp zur Auswahl steht).
+  await ensureSeed();
 }
 
 export async function logout(): Promise<void> {
@@ -171,7 +185,7 @@ function revive(entity: string, payload: unknown): Record<string, unknown> | nul
   return p;
 }
 
-async function applyChange(ch: PullChange, touchedHtml: string[]): Promise<void> {
+async function applyChange(ch: PullChange): Promise<void> {
   const table = tableFor(ch.entity);
   if (!table) return;
 
@@ -194,21 +208,16 @@ async function applyChange(ch: PullChange, touchedHtml: string[]): Promise<void>
   if (local && typeof local.updatedAt === 'number' && local.updatedAt > remoteAt) return;
 
   await table.put(payload);
-
-  if (ch.entity === 'note') {
-    const note = payload as unknown as Note;
-    for (const v of Object.values(note.fields ?? {})) touchedHtml.push(v);
-  }
 }
 
-async function pullAll(token: string, touchedHtml: string[]): Promise<void> {
+async function pullAll(token: string): Promise<void> {
   let cursor = await getCursor();
   for (let guard = 0; guard < 5000; guard++) {
     const res = await apiPost('/api/sync/pull', { cursor }, token);
     if (res.status === 401) throw new AuthError();
     if (!res.ok) throw new Error(`Pull fehlgeschlagen (${res.status})`);
     const data = (await res.json()) as { cursor: number; changes: PullChange[]; hasMore: boolean };
-    for (const ch of data.changes) await applyChange(ch, touchedHtml);
+    for (const ch of data.changes) await applyChange(ch);
     cursor = data.cursor;
     await setCursor(cursor);
     if (!data.hasMore) return;
@@ -255,18 +264,24 @@ async function runSync(): Promise<void> {
   if (!auth) return;
   setState({ syncing: true, error: null });
   try {
-    const touchedHtml: string[] = [];
-    await pullAll(auth.token, touchedHtml);
+    await pullAll(auth.token);
     await pushOutbox(auth.token);
-    await pullAll(auth.token, touchedHtml); // Cursor über eigene Writes hinweg settlen
+    await pullAll(auth.token); // Cursor über eigene Writes hinweg settlen
 
     // Medien: lokale Blobs hochladen (R2; 503-tolerant) + fehlende Bilder nachladen.
     await uploadPendingMedia(BASE, auth.token);
+    // Über ALLE lokalen Notizen prüfen (nicht nur die in diesem Pull berührten): ein
+    // einzelner Fehlversuch (Netzwerk-Hänger, R2 kurzzeitig 503) darf ein Bild nicht
+    // dauerhaft unerreichbar machen — ensureMediaForHtml überspringt ohnehin Hashes, die
+    // bereits lokal vorliegen, ist also auf jedem Sync-Lauf günstig wiederholbar.
+    const notes = await db.notes.toArray();
     const seen = new Set<string>();
-    for (const html of touchedHtml) {
-      if (seen.has(html)) continue;
-      seen.add(html);
-      await ensureMediaForHtml(BASE, auth.token, html);
+    for (const note of notes) {
+      for (const html of Object.values(note.fields ?? {})) {
+        if (seen.has(html)) continue;
+        seen.add(html);
+        await ensureMediaForHtml(BASE, auth.token, html);
+      }
     }
 
     const now = Date.now();

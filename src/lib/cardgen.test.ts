@@ -57,6 +57,24 @@ describe('generateCards', () => {
     const specs = generateCards(makeNote({ Text: 'ohne' }, 'nt2'), clozeNt);
     expect(specs).toEqual([{ templateOrd: 0, clozeNum: 1 }]);
   });
+  it('Standard: Template ohne Inhalt auf der Vorderseite erzeugt keine Karte', () => {
+    const nt: NoteType = { ...standardNt, templates: [{ name: 'K', qfmt: '{{Missing}}', afmt: '{{Back}}' }] };
+    const specs = generateCards(makeNote({ Front: 'a', Back: 'b' }), nt);
+    expect(specs).toEqual([]);
+  });
+  it('Standard: nur Templates mit Inhalt werden erzeugt (optionale Rückwärtskarte)', () => {
+    const nt: NoteType = {
+      ...standardNt,
+      templates: [
+        { name: 'Vorwärts', qfmt: '{{Front}}', afmt: '{{Back}}' },
+        { name: 'Rückwärts', qfmt: '{{#AddReverse}}{{Back}}{{/AddReverse}}', afmt: '{{Front}}' },
+      ],
+    };
+    const withFlag = generateCards(makeNote({ Front: 'a', Back: 'b', AddReverse: 'y' }), nt);
+    const withoutFlag = generateCards(makeNote({ Front: 'a', Back: 'b' }), nt);
+    expect(withFlag.map((s) => s.templateOrd)).toEqual([0, 1]);
+    expect(withoutFlag.map((s) => s.templateOrd)).toEqual([0]);
+  });
 });
 
 describe('renderCard (Standard)', () => {
@@ -74,6 +92,15 @@ describe('renderCard (Standard)', () => {
     });
     expect(back).toContain('Frage');
     expect(back).toContain('Antwort');
+  });
+  it('{{FrontSide}}-Ersetzung interpretiert kein $-Muster aus Feldwerten', () => {
+    // "$&" wäre als String.replace-Ersetzungsmuster der komplette Match — ohne Function-
+    // Replacer würde "Anfang" hier dupliziert im Back-HTML auftauchen.
+    const { back } = renderCard(makeNote({ Front: 'Anfang$&Ende', Back: 'Antwort' }), standardNt, {
+      templateOrd: 0,
+      clozeNum: null,
+    });
+    expect(back.match(/Anfang/g)?.length).toBe(1);
   });
   it('Konditionalfelder: {{#F}} nur bei gefülltem, {{^F}} nur bei leerem Feld', () => {
     const nt: NoteType = {

@@ -4,8 +4,24 @@ const DEFAULT_CSS = `.card{font-family:system-ui,-apple-system,Segoe UI,Roboto,s
 line-height:1.5;text-align:center;color:#e2e8f0}.cloze{color:#38bdf8;font-weight:600}hr{border:none;
 border-top:1px solid #334155;margin:1rem 0}`;
 
+let seeding: Promise<void> | null = null;
+
 // Lege beim ersten Start ein Standard-Deck und die Basis-Notiztypen an.
-export async function ensureSeed(): Promise<void> {
+// Modul-weiter In-Flight-Guard (gleiches Muster wie sync()): ensureSeed() wird u. a. aus
+// einem React-Effect aufgerufen, den StrictMode im Dev-Modus zweimal fast gleichzeitig
+// feuert. Ohne Guard würden beide Aufrufe `count === 0` lesen, bevor der jeweils andere
+// geschrieben hat — der zweite bulkAdd/add liefe dann auf einen Primärschlüssel-Konflikt
+// mit den festen IDs (nt-basic, deck-default) und würde als unbehandelte BulkError/
+// ConstraintError in der Konsole landen.
+export function ensureSeed(): Promise<void> {
+  if (seeding) return seeding;
+  seeding = ensureSeedInner().finally(() => {
+    seeding = null;
+  });
+  return seeding;
+}
+
+async function ensureSeedInner(): Promise<void> {
   const deckCount = await db.decks.count();
   const ntCount = await db.noteTypes.count();
   const now = Date.now();

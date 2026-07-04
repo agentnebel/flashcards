@@ -74,6 +74,26 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     reload();
   }, [reload]);
 
+  // Periodisch neu fällige Karten in die laufende Session mischen (nur Study, nicht Cram):
+  // eine mit "Nochmal" bewertete Karte wird in ~1–10 Min wieder fällig (FSRS Learning-Step),
+  // taucht aber sonst nie wieder auf — die Session lädt die Schlange nach dem ersten Laden
+  // nie erneut nach, außer wenn sie ganz leer wird (siehe unten). Alle 20s die aktuelle
+  // Schlange mit frisch fälligen Karten ergänzen (anhängen, nicht ersetzen: Reihenfolge/
+  // aktuelle Karte bleiben unangetastet).
+  useEffect(() => {
+    if (cram || !deckId) return;
+    const timer = window.setInterval(async () => {
+      const fresh = await getStudyQueue(deckId);
+      setQueue((q) => {
+        const cur = q ?? [];
+        const existing = new Set(cur.map((c) => c.id));
+        const toAdd = fresh.filter((c) => !existing.has(c.id) && !answeredIds.current.has(c.id));
+        return toAdd.length ? [...cur, ...toAdd] : cur;
+      });
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [deckId, cram]);
+
   // Screen Wake Lock: Bildschirm bleibt während der Session an.
   useEffect(() => {
     let lock: { release(): Promise<void> } | null = null;
@@ -127,7 +147,15 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       setDrag(0);
       setLeaving(null);
       const r = await renderFor(current);
-      if (!alive || !r) return;
+      if (!alive) return;
+      if (!r) {
+        // Notiz/Notiztyp fehlt lokal (z. B. auf einem anderen Gerät gelöscht, oder ein
+        // Notiztyp aus dem Sync noch nicht angekommen) — Karte überspringen statt die
+        // Session mit einem dauerhaften "Lädt…" zu blockieren.
+        console.warn('Karte ohne lokale Notiz/Notiztyp übersprungen:', current.id);
+        setQueue((q) => (q ?? []).slice(1));
+        return;
+      }
       setRendered(r);
       // Prefetch: Medien der nächsten Karte im Hintergrund auflösen (Cache wärmt sich).
       const next = queue?.[1];
@@ -166,23 +194,40 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       // Optimistisch: Schlange sofort weiterschalten, DB-Write (vorab berechneter Plan) läuft write-behind.
       // Schlägt der Write fehl (z. B. Speicher-Quota), Karte wieder freigeben — sie kommt
       // beim nächsten Nachladen der Schlange zurück, statt still verloren zu gehen.
-      commitReview(current, schedule[grade]).catch((err) => {
-        console.error('Bewertung konnte nicht gespeichert werden:', err);
-        answeredIds.current.delete(current.id);
-        setDone((n) => Math.max(0, n - 1));
-        setError((err as Error).message || 'Bewertung konnte nicht gespeichert werden.');
-        void reload();
-      });
+      commitReview(current, schedule[grade])
+        .then(() => {
+          // Erst NACH dem committeten Write freigeben: eine mit "Nochmal" bewertete Karte
+          // wird (Learning-Step) in ein paar Minuten wieder fällig und muss dann über den
+          // periodischen Re-Check (oben) in dieser Session erneut auftauchen können — bliebe
+          // sie dauerhaft in answeredIds, würde sie erst beim nächsten Deck-Öffnen wiederkommen.
+          answeredIds.current.delete(current.id);
+        })
+        .catch((err) => {
+          console.error('Bewertung konnte nicht gespeichert werden:', err);
+          answeredIds.current.delete(current.id);
+          setDone((n) => Math.max(0, n - 1));
+          setError((err as Error).message || 'Bewertung konnte nicht gespeichert werden.');
+          void reload();
+        });
       setDone((n) => n + 1);
       setQueue((q) => (q ?? []).slice(1));
     },
     [current, schedule, cram, reload],
   );
 
-  // Wenn die Schlange leer wird: ggf. neu fällige Lernkarten nachladen.
-  // Im Cram-Modus NICHT – leere Schlange bedeutet dort: Durchlauf fertig (sonst Endlosschleife).
+  // Wenn die Schlange leer wird: einmal neu fällige Lernkarten nachladen.
+  // Im Cram-Modus NICHT – leere Schlange bedeutet dort: Durchlauf fertig.
+  // Guard per Ref: reload() liefert bei weiterhin nichts Fälligem wieder ein leeres Array
+  // (neue Referenz) → ohne den Guard würde dieser Effekt sich selbst endlos erneut auslösen
+  // (Dauerschleife von IndexedDB-Abfragen, solange der Screen offen bleibt). Der periodische
+  // Re-Check oben übernimmt das weitere Nachladen, sobald tatsächlich etwas fällig wird.
+  const emptyReloadedRef = useRef(false);
   useEffect(() => {
-    if (!cram && queue && queue.length === 0) reload();
+    if (cram || !queue) return;
+    if (queue.length > 0) { emptyReloadedRef.current = false; return; }
+    if (emptyReloadedRef.current) return;
+    emptyReloadedRef.current = true;
+    reload();
   }, [queue, reload, cram]);
 
   const reveal = useCallback(() => {

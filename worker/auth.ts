@@ -123,9 +123,17 @@ export async function handleRegister(req: IRequest, env: Env): Promise<Response>
   if (existing) return error(409, 'E-Mail bereits registriert');
   const id = crypto.randomUUID();
   const hash = await hashPassword(password);
-  await env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?,?,?,?)')
-    .bind(id, email, hash, Date.now())
-    .run();
+  try {
+    await env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?,?,?,?)')
+      .bind(id, email, hash, Date.now())
+      .run();
+  } catch (e) {
+    // Race zwischen dem obigen SELECT und diesem INSERT (zwei gleichzeitige Registrierungen
+    // derselben E-Mail): die UNIQUE-Constraint schlägt zu statt des vorherigen Checks.
+    // Ohne dieses catch würde D1 hier einen 500er werfen statt der erwarteten 409.
+    if (/unique/i.test((e as Error).message ?? '')) return error(409, 'E-Mail bereits registriert');
+    throw e;
+  }
   const token = await signJwt({ sub: id }, env.JWT_SECRET);
   return json({ token, user: { id, email } });
 }

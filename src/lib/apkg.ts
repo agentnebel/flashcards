@@ -192,6 +192,7 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
     const existingGuids = new Set((await db.notes.orderBy('guid').keys()) as string[]);
     const insertedModelIds = new Set<string>();
     let skipped = 0;
+    let skippedEmpty = 0;
 
     // Pass 2: Notizen + Karten in Batches anlegen.
     let noteCount = 0;
@@ -214,13 +215,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
             fields[name] = rewrite(values[i] ?? '');
           });
           if (!Object.values(fields).some((v) => v.trim())) continue;
-          existingGuids.add(noteGuid); // auch innerhalb desselben Imports nicht doppeln
-
-          if (!insertedModelIds.has(modelId)) {
-            await db.noteTypes.add(nt);
-            await db.outbox.add({ op: 'upsert', entity: 'noteType', entityId: ntId, payload: nt, createdAt: now });
-            insertedModelIds.add(modelId);
-          }
 
           const id = uuid();
           const note: Note = {
@@ -233,7 +227,19 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
             sortField: fields[fieldNames[0]] ?? '',
             updatedAt: now,
           };
-          const cards: Card[] = generateCards(note, nt).map((s) => {
+          const cardSpecs = generateCards(note, nt);
+          // Kein Template hat für diese Feldwerte Inhalt (z. B. "optional umgekehrte Karte"
+          // ohne gesetztes Flag) → wie Anki keine leere, unbeantwortbare Karte anlegen.
+          if (cardSpecs.length === 0) { skippedEmpty++; continue; }
+          existingGuids.add(noteGuid); // auch innerhalb desselben Imports nicht doppeln
+
+          if (!insertedModelIds.has(modelId)) {
+            await db.noteTypes.add(nt);
+            await db.outbox.add({ op: 'upsert', entity: 'noteType', entityId: ntId, payload: nt, createdAt: now });
+            insertedModelIds.add(modelId);
+          }
+
+          const cards: Card[] = cardSpecs.map((s) => {
             const fsrs = createEmptyCard(new Date());
             return {
               id: uuid(),
@@ -265,6 +271,9 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
     }
     if (skipped > 0) {
       warnings.push(`${skipped} bereits vorhandene Notiz(en) übersprungen (gleiche GUID).`);
+    }
+    if (skippedEmpty > 0) {
+      warnings.push(`${skippedEmpty} Notiz(en) ohne Inhalt für ihre Kartenvorlage übersprungen (keine Karte erzeugt).`);
     }
 
     return { noteTypes: insertedModelIds.size, notes: noteCount, cards: cardCount, media: mediaCount, warnings };

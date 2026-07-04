@@ -16,6 +16,14 @@ export function clozeNumbers(text: string): number[] {
   return [...set].sort((a, b) => a - b);
 }
 
+// Prüft, ob ein Vorderseiten-Template für die gegebenen Feldwerte etwas anderes als Tags/
+// Whitespace ergäbe. Anki erzeugt pro Template nur dann eine Karte, wenn dessen gerenderte
+// Vorderseite nicht leer ist — sonst entstünde eine leere, unbeantwortbare Karte (z. B. beim
+// "optional umgekehrte Karte"-Template, solange das Umkehr-Flag-Feld leer ist).
+function frontHasContent(qfmt: string, fields: Record<string, string>): boolean {
+  return fill(qfmt, fields).replace(/<[^>]*>/g, '').trim() !== '';
+}
+
 // Aus einer Notiz werden 1..n Karten erzeugt (Templates bzw. Cloze-Deletions).
 export function generateCards(note: Note, nt: NoteType): CardSpec[] {
   if (nt.kind === 'cloze') {
@@ -24,7 +32,10 @@ export function generateCards(note: Note, nt: NoteType): CardSpec[] {
     if (nums.length === 0) return [{ templateOrd: 0, clozeNum: 1 }];
     return nums.map((n) => ({ templateOrd: 0, clozeNum: n }));
   }
-  return nt.templates.map((_, i) => ({ templateOrd: i, clozeNum: null }));
+  return nt.templates
+    .map((t, i) => ({ templateOrd: i, clozeNum: null as number | null, qfmt: t.qfmt }))
+    .filter((s) => frontHasContent(s.qfmt, note.fields))
+    .map(({ templateOrd, clozeNum }) => ({ templateOrd, clozeNum }));
 }
 
 // Anki-Konditionalfelder auflösen: {{#F}}…{{/F}} nur bei nicht-leerem Feld F,
@@ -100,6 +111,8 @@ export function renderCard(
   const tmpl = nt.templates[card.templateOrd] ?? nt.templates[0];
   const front = fill(tmpl.qfmt, note.fields, renderMarkdown);
   // {{FrontSide}} zuerst durch die gerenderte Vorderseite ersetzen, dann übrige Felder füllen.
-  const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, front), note.fields, renderMarkdown);
+  // Funktions-Replacer statt String: verhindert, dass "$&"/"$'" etc. in `front` (kommt aus
+  // Feldwerten/Markdown) von String.replace als $-Ersetzungsmuster interpretiert werden.
+  const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, () => front), note.fields, renderMarkdown);
   return { front: sanitizeHtml(front), back: sanitizeHtml(back) };
 }

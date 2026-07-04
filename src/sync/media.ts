@@ -67,6 +67,14 @@ export async function uploadPendingMedia(
       if (res.status === 200) {
         await markSynced(m.hash);
         uploaded += 1;
+      } else if (res.status === 415 || res.status === 413) {
+        // Dauerhaft abgelehnt (falscher Dateityp z. B. SVG, oder über dem 15-MB-Limit) —
+        // ein erneuter Versuch würde nie klappen. Ohne diese Markierung würde der komplette
+        // Blob bei jedem Auto-Sync (alle 60 s) erneut hochgeladen, für die Lebensdauer des
+        // Kontos. Als synced markieren und aufgeben (Bild bleibt lokal sichtbar, syncht aber
+        // nicht auf andere Geräte).
+        await markSynced(m.hash);
+        failed += 1;
       } else {
         // 503 (R2 deaktiviert) o. Ä. → offen lassen, später erneut versuchen.
         failed += 1;

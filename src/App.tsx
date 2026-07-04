@@ -11,6 +11,7 @@ const Browse = lazy(() => import('./screens/Browse'));
 const Settings = lazy(() => import('./screens/Settings'));
 const Import = lazy(() => import('./screens/Import'));
 import { db } from './db/db';
+import { ensureSeed } from './db/seed';
 import { useOnlineStatus } from './lib/useOnlineStatus';
 import { getAuth, getSyncState, loadLastSyncAt, subscribeSync, sync } from './sync/engine';
 
@@ -67,6 +68,15 @@ export default function App() {
 
   // Während des Lernens (Review/Wiederholung) auf Mobile die Tableiste ausblenden (Fokus).
   const isReview = /\/deck\/[^/]+\/(study|cram)$/.test(location.pathname);
+
+  // Seed (Basis-Decks/-Notiztypen) sicherstellen, sobald die App-Shell tatsächlich mountet –
+  // nicht nur beim harten Erstladen von /app/*. Sonst bleibt ein Besucher, der über die
+  // Landingpage per Client-Side-Navigation (<Link to="/app">) hierher kommt, ohne Decks
+  // und Notiztypen hängen (kein Reload ausgelöst → main.tsx-Pfadprüfung greift nie).
+  // ensureSeed ist idempotent (No-Op sobald Decks/Notiztypen existieren).
+  useEffect(() => {
+    void ensureSeed();
+  }, []);
 
   // Auto-Sync: bei Start, beim Online-Gehen, beim Sichtbarwerden und periodisch.
   useEffect(() => {

@@ -2,7 +2,10 @@ import { db, type Card, type Deck, type Media, type Note, type NoteType, type Ou
 import { makeScheduler } from '../scheduler/fsrs';
 import type { RecordLog, RecordLogItem } from 'ts-fsrs';
 import { uuid } from './ids';
+import { generateCards } from '../lib/cardgen';
 import { freshCardsForNote, reconcileCardsForNote } from './cardReconcile';
+
+const NO_CARDS_MSG = 'Diese Notiz würde keine Karten erzeugen. Bitte fülle die für die Kartenvorlage benötigten Felder aus.';
 
 // FSRS verlangt request_retention in (0,1]; defensiv auf einen sinnvollen Bereich klemmen,
 // damit ein korrupter/aus dem Sync stammender Wert den Scheduler nicht crasht.
@@ -53,6 +56,7 @@ export async function addNote(params: {
     updatedAt: now,
   };
   const cards = freshCardsForNote(note, nt, now);
+  if (cards.length === 0) throw new Error(NO_CARDS_MSG);
   await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
     await db.notes.add(note);
     await db.cards.bulkAdd(cards);
@@ -77,11 +81,15 @@ export async function renameDeck(deckId: string, name: string): Promise<void> {
 export async function deleteDeck(deckId: string): Promise<void> {
   const now = Date.now();
   const deckIds = await getDescendantDeckIds(deckId);
-  const [notes, cards] = await Promise.all([
-    Promise.all(deckIds.map((id) => db.notes.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
-    Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
-  ]);
+  // Notes/Cards ERST innerhalb der Transaktion lesen (nicht vorab): sonst könnte zwischen
+  // dem Lesen und dem Löschen eine parallele Schreibung (z. B. ein laufender Sync-Pull)
+  // eine neue Notiz/Karte in einem der Decks anlegen, die dann ohne Tombstone lokal
+  // gelöscht würde und beim nächsten Sync als Geisterobjekt zurückkäme.
   await db.transaction('rw', db.decks, db.notes, db.cards, db.outbox, async () => {
+    const [notes, cards] = await Promise.all([
+      Promise.all(deckIds.map((id) => db.notes.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
+      Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
+    ]);
     await db.decks.bulkDelete(deckIds);
     for (const id of deckIds) {
       await db.notes.where('deckId').equals(id).delete();
@@ -112,6 +120,10 @@ export async function updateNote(
   const now = Date.now();
   const deckId = newDeckId ?? note.deckId;
   const updated: Note = { ...note, fields, noteTypeId: resolvedNoteTypeId, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now };
+  // Vorab prüfen (vor jeder DB-Schreibung): würde diese Bearbeitung die Notiz auf null
+  // Karten bringen (z. B. leeres Pflichtfeld einer Kartenvorlage), lieber ablehnen als
+  // eine unsichtbare, nie wieder auffindbare Notiz zu hinterlassen.
+  if (generateCards(updated, nt).length === 0) throw new Error(NO_CARDS_MSG);
   const existingCards = await db.cards.where('noteId').equals(noteId).toArray();
 
   if (resolvedNoteTypeId !== note.noteTypeId) {
@@ -198,6 +210,7 @@ export async function importNotes(params: {
           updatedAt: now,
         };
         const cards = freshCardsForNote(note, nt, now);
+        if (cards.length === 0) continue; // Kartenvorlage bliebe für diese Zeile leer
         await db.notes.add(note);
         await db.cards.bulkAdd(cards);
         await db.outbox.add({ op: 'upsert', entity: 'note', entityId: id, payload: note, createdAt: now });
@@ -383,13 +396,14 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 export async function exportBackup(): Promise<string> {
-  const [decks, noteTypes, notes, cards, revlog, mediaRows] = await Promise.all([
+  const [decks, noteTypes, notes, cards, revlog, mediaRows, retention] = await Promise.all([
     db.decks.toArray(),
     db.noteTypes.toArray(),
     db.notes.toArray(),
     db.cards.toArray(),
     db.revlog.toArray(),
     db.media.toArray(),
+    getDesiredRetention(),
   ]);
   // Medien als base64-Data-URLs einbetten, damit das Backup vollständig ist.
   const media = await Promise.all(
@@ -401,17 +415,40 @@ export async function exportBackup(): Promise<string> {
       dataUrl: await blobToDataUrl(m.blob),
     })),
   );
+  // Nur die Ziel-Retention aus `meta` sichern — NICHT den Rest von `meta` (auth-Token,
+  // syncCursor etc.): ein Backup ist eine Datei, die der Nutzer weitergibt/aufbewahrt,
+  // ein enthaltenes Auth-Token wäre ein Kontoübernahme-Risiko.
   return JSON.stringify(
-    { version: 1, exportedAt: new Date().toISOString(), decks, noteTypes, notes, cards, revlog, media },
+    {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      decks,
+      noteTypes,
+      notes,
+      cards,
+      revlog,
+      media,
+      settings: { desiredRetention: retention },
+    },
     null,
     2,
   );
 }
 
 // data:-URL → Blob (Gegenstück zu blobToDataUrl, für den Backup-Import).
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const res = await fetch(dataUrl);
-  return res.blob();
+// Bewusst OHNE fetch(): die produktive CSP setzt `connect-src 'self'`, was `fetch("data:…")`
+// blockiert (Chrome/Firefox behandeln das als Netzwerk-Request) — ein Backup mit Bildern
+// ließ sich dadurch nie wiederherstellen ("Failed to fetch"). atob() ist reine Dekodierung,
+// kein Netzwerkzugriff, und bleibt von der CSP unberührt.
+function dataUrlToBlob(dataUrl: string): Blob {
+  const match = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error('Ungültige data-URL im Backup');
+  const [, mime, isBase64, data] = match;
+  if (!isBase64) return new Blob([decodeURIComponent(data)], { type: mime || 'application/octet-stream' });
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime || 'application/octet-stream' });
 }
 
 interface BackupMedia {
@@ -428,6 +465,7 @@ interface BackupFile {
   cards?: Card[];
   revlog?: RevlogEntry[];
   media?: BackupMedia[];
+  settings?: { desiredRetention?: number };
 }
 
 // Spiegelt ein Backup zurück in die lokale DB. JSON serialisiert Date→String, daher
@@ -460,7 +498,7 @@ export async function importBackup(json: string): Promise<{ decks: number; notes
   const media: Media[] = [];
   for (const m of data.media ?? []) {
     if (!m?.dataUrl || !m.hash) continue;
-    const blob = await dataUrlToBlob(m.dataUrl);
+    const blob = dataUrlToBlob(m.dataUrl);
     media.push({
       hash: m.hash,
       blob,
@@ -475,7 +513,7 @@ export async function importBackup(json: string): Promise<{ decks: number; notes
 
   await db.transaction(
     'rw',
-    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.media, db.outbox],
+    [db.decks, db.noteTypes, db.notes, db.cards, db.revlog, db.media, db.meta, db.outbox],
     async () => {
       const at = Date.now();
       const enqueue = async (entity: OutboxItem['entity'], rows: { id: string }[]) => {
@@ -490,6 +528,9 @@ export async function importBackup(json: string): Promise<{ decks: number; notes
       if (revlog.length) { await db.revlog.bulkPut(revlog); await enqueue('revlog', revlog); }
       // Medien: synced:0 → der reguläre Medien-Sync lädt sie beim nächsten Lauf hoch.
       if (media.length) await db.media.bulkPut(media);
+      if (typeof data.settings?.desiredRetention === 'number') {
+        await db.meta.put({ key: 'desiredRetention', value: clampRetention(data.settings.desiredRetention) });
+      }
     },
   );
 

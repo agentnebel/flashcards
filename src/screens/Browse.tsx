@@ -85,13 +85,14 @@ export default function Browse() {
     return m;
   }, [cards]);
 
-  const filtered = useMemo(
-    () =>
-      (notes ?? []).filter(
-        (n) => !n.deleted && (!q || JSON.stringify(n.fields).toLowerCase().includes(q.toLowerCase())),
-      ),
-    [notes, q],
-  );
+  const filtered = useMemo(() => {
+    const needle = q.toLowerCase();
+    return (notes ?? []).filter(
+      (n) =>
+        !n.deleted &&
+        (!needle || Object.values(n.fields).some((v) => v.toLowerCase().includes(needle))),
+    );
+  }, [notes, q]);
 
   // Notizen nach Deck gruppieren; Sektionen alphabetisch nach Deck-Pfad. Innerhalb einer
   // Sektion bleibt die „zuletzt bearbeitet"-Reihenfolge erhalten (filtered ist so sortiert).
@@ -139,6 +140,16 @@ export default function Browse() {
     io.observe(el);
     return () => io.disconnect();
   }, [hasMore, sliced.length]);
+
+  function handleDeleteNote(n: Note) {
+    const count = (cardsByNote.get(n.id) ?? []).length;
+    const label = stripTags(n.sortField) || '(leer)';
+    const msg = count > 0
+      ? `Notiz „${label}" und ${count} Karte(n) darin löschen?`
+      : `Notiz „${label}" löschen?`;
+    if (!window.confirm(msg)) return;
+    void deleteNote(n.id);
+  }
 
   function toggle(deckId: string) {
     setCollapsed((prev) => {
@@ -210,7 +221,7 @@ export default function Browse() {
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
           </button>
-          <button className="icon-btn destructive" onClick={() => void deleteNote(n.id)} title="Löschen" aria-label="Karte löschen" style={{ minWidth: 44, minHeight: 44 }}>
+          <button className="icon-btn destructive" onClick={() => handleDeleteNote(n)} title="Löschen" aria-label="Karte löschen" style={{ minWidth: 44, minHeight: 44 }}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
             </svg>

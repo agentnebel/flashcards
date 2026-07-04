@@ -48,6 +48,10 @@ export default function AddCard() {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const caretRefs = useRef<Record<string, number>>({});
   const loadedNoteIdRef = useRef<string | null>(null);
+  // Welchem Notiztyp der aktuelle `fields`-State entspricht. Verhindert, dass beim
+  // Notiztyp-Wechsel im Edit-Modus die (dann falschen, aber unsichtbaren) alten Feldwerte
+  // stehen bleiben und mitgespeichert werden — siehe Reset-Effekt unten.
+  const fieldsNoteTypeRef = useRef<string | null>(null);
 
   // Edit-Modus: Note-Daten einladen. Pro noteId genau einmal — aber beim Wechsel
   // /edit/A → /edit/B (gleiche Komponenteninstanz) erneut laden, sonst zeigt/speichert
@@ -58,6 +62,7 @@ export default function AddCard() {
     setDeckId(existingNote.deckId);
     setNoteTypeId(existingNote.noteTypeId);
     setFields(existingNote.fields);
+    fieldsNoteTypeRef.current = existingNote.noteTypeId;
     loadedNoteIdRef.current = existingNote.id;
   }, [isEdit, existingNote]);
 
@@ -73,10 +78,17 @@ export default function AddCard() {
 
   const nt = useMemo(() => noteTypes?.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
 
+  // Felder zurücksetzen, sobald der AUSGEWÄHLTE Notiztyp nicht mehr zu dem passt, für den
+  // `fields` zuletzt gesetzt wurde. Deckt zwei Fälle ab: (1) neue Karte, Notiztyp-Dropdown
+  // geändert — wie zuvor. (2) Karte bearbeiten, Nutzer wechselt den Notiztyp im Dropdown —
+  // vorher blieben hier (wegen `if (isEdit) return`) unsichtbar die alten alten Feld-Keys
+  // stehen, `canSave` blieb aktiv, und Speichern schrieb Karten mit leeren Werten.
   useEffect(() => {
-    if (isEdit) return;
-    if (nt) setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
-  }, [nt, isEdit]);
+    if (!nt) return;
+    if (fieldsNoteTypeRef.current === nt.id) return;
+    setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
+    fieldsNoteTypeRef.current = nt.id;
+  }, [nt]);
 
   if (!decks || !noteTypes) return <p className="muted">Lädt…</p>;
 
@@ -160,16 +172,22 @@ export default function AddCard() {
 
   async function onSave() {
     if (!nt || !deckId) return;
-    if (isEdit && noteId) {
-      await updateNote(noteId, fields, deckId, noteTypeId);
-      setSaved(true);
-      setTimeout(() => { setSaved(false); navigate('/app/browse'); }, 1000);
-    } else {
-      await addNote({ noteTypeId: nt.id, deckId, fields });
-      setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
-      caretRefs.current = {};
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+    try {
+      if (isEdit && noteId) {
+        await updateNote(noteId, fields, deckId, noteTypeId);
+        setSaved(true);
+        setTimeout(() => { setSaved(false); navigate('/app/browse'); }, 1000);
+      } else {
+        await addNote({ noteTypeId: nt.id, deckId, fields });
+        setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
+        caretRefs.current = {};
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1500);
+      }
+    } catch (err) {
+      // z. B. würde die Notiz keine Karte erzeugen (Pflichtfeld einer Vorlage leer) —
+      // ohne dieses catch bliebe der Fehler unsichtbar (fire-and-forget-Klick-Handler).
+      alert((err as Error).message || 'Speichern fehlgeschlagen.');
     }
   }
 
