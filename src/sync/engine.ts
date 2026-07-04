@@ -229,6 +229,7 @@ async function pushOutbox(token: string): Promise<void> {
       entity: i.entity,
       entityId: i.entityId,
       payload: i.payload,
+      createdAt: i.createdAt,
     }));
     const res = await apiPost('/api/sync/push', { mutations }, token);
     if (res.status === 401) throw new AuthError();

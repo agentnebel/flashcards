@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { db } from '../db/db';
 import type { Deck } from '../db/db';
 import { createDeck, deleteDeck, getReviewStreak, renameDeck } from '../db/api';
@@ -13,11 +13,34 @@ export default function DeckList() {
   const [editMode, setEditMode] = useState(false);
   const navigate = useNavigate();
 
+  const descendantIdsByDeck = useMemo(() => {
+    const childrenByParent = new Map<string, string[]>();
+    for (const d of decks ?? []) {
+      if (!d.parentId) continue;
+      const children = childrenByParent.get(d.parentId);
+      if (children) children.push(d.id);
+      else childrenByParent.set(d.parentId, [d.id]);
+    }
+    return new Map((decks ?? []).map((deck) => {
+      const ids = [deck.id];
+      const stack = [deck.id];
+      while (stack.length) {
+        const cur = stack.pop() as string;
+        for (const child of childrenByParent.get(cur) ?? []) {
+          ids.push(child);
+          stack.push(child);
+        }
+      }
+      return [deck.id, new Set(ids)] as const;
+    }));
+  }, [decks]);
+
   if (!decks || !cards) return <p className="muted">Lädt…</p>;
 
   const now = Date.now();
   const counts = (deckId: string) => {
-    const active = cards.filter((c) => c.deckId === deckId && !c.suspended && !c.deleted);
+    const deckIds = descendantIdsByDeck.get(deckId) ?? new Set([deckId]);
+    const active = cards.filter((c) => deckIds.has(c.deckId) && !c.suspended && !c.deleted);
     return {
       due: active.filter((c) => c.fsrs.state !== 0 && c.due.getTime() <= now).length,
       fresh: active.filter((c) => c.fsrs.state === 0).length,
@@ -38,7 +61,8 @@ export default function DeckList() {
   }
 
   async function handleDelete(deck: Deck) {
-    const cardCount = cards!.filter((c) => c.deckId === deck.id).length;
+    const deckIds = descendantIdsByDeck.get(deck.id) ?? new Set([deck.id]);
+    const cardCount = cards!.filter((c) => deckIds.has(c.deckId)).length;
     const msg = cardCount > 0
       ? `Deck „${deck.name}" und alle ${cardCount} Karten darin löschen?`
       : `Deck „${deck.name}" löschen?`;

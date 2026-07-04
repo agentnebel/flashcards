@@ -64,7 +64,7 @@ function fill(
 
 function clozeRender(text: string, num: number, reveal: boolean): string {
   return text.replace(
-    /\{\{c(\d+)::(.*?)(?:::(.*?))?\}\}/g,
+    /\{\{c(\d+)::([\s\S]*?)(?:::([\s\S]*?))?\}\}/g,
     (_all, n: string, ans: string, hint?: string) => {
       if (parseInt(n, 10) === num) {
         return reveal

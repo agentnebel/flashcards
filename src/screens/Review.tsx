@@ -40,6 +40,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   const [done, setDone] = useState(0);
   const [drag, setDrag] = useState(0); // aktuelle horizontale Swipe-Verschiebung
   const [leaving, setLeaving] = useState<'left' | 'right' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const current = queue?.[0] ?? null;
 
@@ -121,12 +122,13 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     let alive = true;
     (async () => {
       if (!current) { setRendered(null); return; }
-      const r = await renderFor(current);
-      if (!alive || !r) return;
-      setRendered(r);
+      setRendered(null);
       setRevealed(false);
       setDrag(0);
       setLeaving(null);
+      const r = await renderFor(current);
+      if (!alive || !r) return;
+      setRendered(r);
       // Prefetch: Medien der nächsten Karte im Hintergrund auflösen (Cache wärmt sich).
       const next = queue?.[1];
       if (next) void renderFor(next);
@@ -156,6 +158,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       }
 
       if (!schedule) return;
+      setError(null);
       // Re-Entrancy-Schutz: dieselbe Karte nie zweimal bewerten (schneller Doppeltipp,
       // Tasten-Autorepeat, Swipe+Klick) – sonst doppelter Revlog-Eintrag + übersprungene Folgekarte.
       if (answeredIds.current.has(current.id)) return;
@@ -166,11 +169,14 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       commitReview(current, schedule[grade]).catch((err) => {
         console.error('Bewertung konnte nicht gespeichert werden:', err);
         answeredIds.current.delete(current.id);
+        setDone((n) => Math.max(0, n - 1));
+        setError((err as Error).message || 'Bewertung konnte nicht gespeichert werden.');
+        void reload();
       });
       setDone((n) => n + 1);
       setQueue((q) => (q ?? []).slice(1));
     },
-    [current, schedule, cram],
+    [current, schedule, cram, reload],
   );
 
   // Wenn die Schlange leer wird: ggf. neu fällige Lernkarten nachladen.
@@ -180,14 +186,15 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   }, [queue, reload, cram]);
 
   const reveal = useCallback(() => {
-    if (revealed) return;
+    if (revealed || !rendered) return;
+    setError(null);
     buzz(8);
     setRevealed(true);
-  }, [revealed]);
+  }, [revealed, rendered]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!current) return;
+      if (!current || !rendered) return;
       if (e.repeat) return; // gedrückt gehaltene Taste nicht als Mehrfachbewertung werten
       if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
         e.preventDefault();
@@ -206,7 +213,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [current, revealed, onAnswer, reveal]);
+  }, [current, rendered, revealed, onAnswer, reveal]);
 
   // --- Swipe (Pointer) ---
   const dragStart = useRef<{ x: number; y: number } | null>(null);
@@ -288,6 +295,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
 
   const pct = total > 0 ? done / total : 0;
   const swipeHint = drag > 24 ? 'good' : drag < -24 ? 'again' : null;
+  const faceHtml = rendered ? (revealed ? rendered.back : rendered.front) : null;
   const cardStyle: React.CSSProperties = drag !== 0 || leaving
     ? {
         transform: `translateX(${drag}px) rotate(${drag * 0.04}deg)`,
@@ -317,18 +325,21 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
           onPointerCancel={endDrag}
         >
           <div
-            key={revealed ? 'back' : 'front'}
+            key={faceHtml ? (revealed ? 'back' : 'front') : 'loading'}
             className="face"
-            dangerouslySetInnerHTML={{ __html: revealed ? rendered?.back ?? '' : rendered?.front ?? '' }}
-          />
+            dangerouslySetInnerHTML={faceHtml ? { __html: faceHtml } : undefined}
+          >
+            {!faceHtml ? <span className="muted">Lädt…</span> : null}
+          </div>
         </div>
       </div>
 
       {!revealed ? (
         <div className="answer-cta">
-          <button className="primary block" onClick={reveal}>
+          <button className="primary block" disabled={!rendered} onClick={reveal}>
             Antwort zeigen
           </button>
+          {error && <p className="feedback err">{error}</p>}
           <p className="reveal-hint">Leertaste · Tippen</p>
         </div>
       ) : cram ? (

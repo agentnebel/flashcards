@@ -9,6 +9,7 @@ interface Mutation {
   entity: string;
   entityId: string;
   payload?: unknown;
+  createdAt?: number;
 }
 
 // Delta-Sync (vereinfachtes USN-Modell): append-only change_log liefert den Cursor (seq),
@@ -54,7 +55,9 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
       const isDelete = m.op === 'delete';
       const payloadObj = !isDelete && m.payload && typeof m.payload === 'object' ? (m.payload as Record<string, unknown>) : null;
       // Konfliktauflösung serverautoritativ per Inhalts-updatedAt (statt reiner Ankunftsreihenfolge).
-      const clientUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : now;
+      const payloadUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : null;
+      const mutationCreatedAt = typeof m.createdAt === 'number' ? m.createdAt : null;
+      const clientUpdatedAt = payloadUpdatedAt ?? mutationCreatedAt ?? now;
       return [
         env.DB.prepare(
           'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',

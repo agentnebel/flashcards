@@ -127,6 +127,13 @@ export default function Settings() {
 
 function Account({ email, outbox }: { email: string; outbox: number }) {
   const syncState = useSync();
+  async function onLogout() {
+    const msg = outbox > 0
+      ? `Abmelden löscht lokale Daten inklusive ${outbox} noch nicht synchronisierte(r) Änderung(en). Trotzdem abmelden?`
+      : 'Abmelden löscht die lokalen App-Daten auf diesem Gerät. Synchronisierte Daten werden beim erneuten Login wieder geladen. Trotzdem abmelden?';
+    if (!window.confirm(msg)) return;
+    await logout();
+  }
   return (
     <div className="group" style={{ padding: 'var(--s4)' }}>
       <div className="stack">
@@ -137,7 +144,7 @@ function Account({ email, outbox }: { email: string; outbox: number }) {
           <button className="primary" disabled={syncState.syncing} onClick={() => void sync()}>
             {syncState.syncing ? 'Synchronisiere…' : 'Jetzt synchronisieren'}
           </button>
-          <button onClick={() => void logout()}>Abmelden</button>
+          <button onClick={() => void onLogout()}>Abmelden</button>
         </div>
         <p className="info" style={{ margin: 0 }}>
           Letzter Sync: {fmtTime(syncState.lastSyncAt)} · offen: {outbox}

@@ -105,6 +105,13 @@ describe('renderCard (Cloze)', () => {
     const { back } = renderCard(note, clozeNt, { templateOrd: 0, clozeNum: 1 });
     expect(back).toContain('<span class="cloze">Antwort</span>');
   });
+  it('rendert Cloze-Lücken über Zeilenumbrüche hinweg', () => {
+    const multiline = makeNote({ Text: '{{c1::erste\nzweite::Tipp}}', Extra: '' }, 'nt2');
+    const { front, back } = renderCard(multiline, clozeNt, { templateOrd: 0, clozeNum: 1 });
+    expect(front).toContain('[Tipp]');
+    expect(front).not.toContain('{{c1::');
+    expect(back).toContain('erste<br>zweite');
+  });
 });
 
 describe('renderCard (Sanitizing)', () => {

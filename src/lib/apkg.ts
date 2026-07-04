@@ -115,7 +115,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
     const modelToNt: Record<string, string> = {};
     const modelFields: Record<string, string[]> = {};
     const modelNt: Record<string, NoteType> = {}; // im Speicher, um DB-Lesen in der Transaktion zu vermeiden
-    let noteTypeCount = 0;
     for (const [mid, model] of Object.entries(models)) {
       const fields = [...model.flds].sort((a, b) => a.ord - b.ord).map((f) => f.name);
       const templates = [...(model.tmpls ?? [])]
@@ -136,9 +135,6 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
       modelToNt[mid] = ntId;
       modelFields[mid] = nt.fields;
       modelNt[mid] = nt;
-      await db.noteTypes.add(nt);
-      await db.outbox.add({ op: 'upsert', entity: 'noteType', entityId: ntId, payload: nt, createdAt: now });
-      noteTypeCount++;
     }
 
     // --- Medien-Manifest (JSON: { "0": "bild.jpg", ... }) ---
@@ -194,6 +190,7 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
     // Bereits vorhandene Anki-guids: erneut importierte Notizen werden übersprungen,
     // statt jede Karte (und Medien) bei jedem Re-Import zu duplizieren.
     const existingGuids = new Set((await db.notes.orderBy('guid').keys()) as string[]);
+    const insertedModelIds = new Set<string>();
     let skipped = 0;
 
     // Pass 2: Notizen + Karten in Batches anlegen.
@@ -207,6 +204,7 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
           const ntId = modelToNt[String(mid)];
           const fieldNames = modelFields[String(mid)];
           const nt = modelNt[String(mid)];
+          const modelId = String(mid);
           if (!ntId || !fieldNames || !nt) continue;
           const noteGuid = String(guid);
           if (existingGuids.has(noteGuid)) { skipped++; continue; } // schon importiert → überspringen
@@ -217,6 +215,12 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
           });
           if (!Object.values(fields).some((v) => v.trim())) continue;
           existingGuids.add(noteGuid); // auch innerhalb desselben Imports nicht doppeln
+
+          if (!insertedModelIds.has(modelId)) {
+            await db.noteTypes.add(nt);
+            await db.outbox.add({ op: 'upsert', entity: 'noteType', entityId: ntId, payload: nt, createdAt: now });
+            insertedModelIds.add(modelId);
+          }
 
           const id = uuid();
           const note: Note = {
@@ -263,7 +267,7 @@ export async function importApkg(file: File, deckId: string): Promise<ApkgResult
       warnings.push(`${skipped} bereits vorhandene Notiz(en) übersprungen (gleiche GUID).`);
     }
 
-    return { noteTypes: noteTypeCount, notes: noteCount, cards: cardCount, media: mediaCount, warnings };
+    return { noteTypes: insertedModelIds.size, notes: noteCount, cards: cardCount, media: mediaCount, warnings };
   } finally {
     sqldb.close();
   }

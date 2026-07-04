@@ -227,7 +227,7 @@ function CsvSection({
             )}
 
             <button className="primary block" disabled={busy || dataCount === 0} onClick={onImport}>
-              {busy ? 'Importiere…' : `${dataCount} Karte(n) importieren`}
+              {busy ? 'Importiere…' : `${dataCount} Zeile(n) importieren`}
             </button>
           </div>
         )}

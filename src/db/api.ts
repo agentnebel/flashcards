@@ -76,13 +76,18 @@ export async function renameDeck(deckId: string, name: string): Promise<void> {
 
 export async function deleteDeck(deckId: string): Promise<void> {
   const now = Date.now();
-  const notes = await db.notes.where('deckId').equals(deckId).toArray();
-  const cards = await db.cards.where('deckId').equals(deckId).toArray();
+  const deckIds = await getDescendantDeckIds(deckId);
+  const [notes, cards] = await Promise.all([
+    Promise.all(deckIds.map((id) => db.notes.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
+    Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
+  ]);
   await db.transaction('rw', db.decks, db.notes, db.cards, db.outbox, async () => {
-    await db.decks.delete(deckId);
-    await db.notes.where('deckId').equals(deckId).delete();
-    await db.cards.where('deckId').equals(deckId).delete();
-    await db.outbox.add({ op: 'delete', entity: 'deck', entityId: deckId, payload: null, createdAt: now });
+    await db.decks.bulkDelete(deckIds);
+    for (const id of deckIds) {
+      await db.notes.where('deckId').equals(id).delete();
+      await db.cards.where('deckId').equals(id).delete();
+      await db.outbox.add({ op: 'delete', entity: 'deck', entityId: id, payload: null, createdAt: now });
+    }
     for (const n of notes) {
       await db.outbox.add({ op: 'delete', entity: 'note', entityId: n.id, payload: null, createdAt: now });
     }
@@ -247,7 +252,7 @@ async function newCardsIntroducedToday(deckCards: Card[]): Promise<number> {
 
 // Deck-IDs eines Decks inkl. aller Unterdecks (parentId-Adjazenz). So schließt Lernen/Zählen
 // eines Eltern-Decks die Karten der Kinder ein, statt sie stillschweigend zu überspringen.
-async function descendantDeckIds(deckId: string): Promise<string[]> {
+export async function getDescendantDeckIds(deckId: string): Promise<string[]> {
   const all = await db.decks.toArray();
   const childrenByParent = new Map<string, string[]>();
   for (const d of all) {
@@ -273,7 +278,7 @@ async function descendantDeckIds(deckId: string): Promise<string[]> {
 // (deck.newPerDay), abzüglich der heute bereits eingeführten neuen Karten. Inkl. Unterdecks.
 export async function getStudyQueue(deckId: string): Promise<Card[]> {
   const now = new Date();
-  const [deck, deckIds] = await Promise.all([db.decks.get(deckId), descendantDeckIds(deckId)]);
+  const [deck, deckIds] = await Promise.all([db.decks.get(deckId), getDescendantDeckIds(deckId)]);
   const all = (await Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray()))).flat();
   const active = all.filter((c) => !c.suspended && !c.deleted);
   const due = active
@@ -290,7 +295,7 @@ export async function getStudyQueue(deckId: string): Promise<Card[]> {
 // sich eine erneute Durchsicht nicht immer gleich anfühlt. Suspendierte/gelöschte Karten
 // bleiben außen vor. Bewerten in diesem Modus ändert NICHTS am FSRS-Plan (siehe Review).
 export async function getCramQueue(deckId: string): Promise<Card[]> {
-  const deckIds = await descendantDeckIds(deckId);
+  const deckIds = await getDescendantDeckIds(deckId);
   const all = (await Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray()))).flat();
   const active = all.filter((c) => !c.suspended && !c.deleted);
   for (let i = active.length - 1; i > 0; i--) {
@@ -312,7 +317,6 @@ export async function commitReview(card: Card, item: RecordLogItem): Promise<voi
   const next = item.card;
   const log = item.log;
   const reviewedAt = log.review instanceof Date ? log.review.getTime() : Date.now();
-  const updated: Card = { ...card, fsrs: next, due: next.due, updatedAt: reviewedAt };
   const rev: RevlogEntry = {
     id: uuid(),
     cardId: card.id,
@@ -327,6 +331,12 @@ export async function commitReview(card: Card, item: RecordLogItem): Promise<voi
     reviewedAt,
   };
   await db.transaction('rw', db.cards, db.revlog, db.outbox, async () => {
+    const current = await db.cards.get(card.id);
+    if (!current) throw new Error('Karte wurde nicht gefunden.');
+    if (current.updatedAt !== card.updatedAt) {
+      throw new Error('Karte wurde inzwischen geändert. Bitte erneut bewerten.');
+    }
+    const updated: Card = { ...current, fsrs: next, due: next.due, updatedAt: reviewedAt };
     await db.cards.put(updated);
     await db.revlog.add(rev);
     await db.outbox.add({ op: 'upsert', entity: 'card', entityId: card.id, payload: updated, createdAt: reviewedAt });
