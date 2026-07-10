@@ -29,21 +29,12 @@ jobs:
       - run: npm run build
 
       # Auto-Deploy NUR, wenn ein Cloudflare-API-Token als Repo-Secret existiert.
-      # Ohne Token wird der Schritt übersprungen statt fehlzuschlagen.
+      # Ohne Token wird der Schritt übersprungen statt fehlzuschlagen. D1-Migrationen
+      # laufen bewusst nicht bei jedem Push; sie werden bei Schemaänderungen separat
+      # mit `wrangler d1 execute ...` angewendet.
       # Secrets setzen: Repo → Settings → Secrets and variables → Actions
-      #   CLOUDFLARE_API_TOKEN  (Workers/D1/R2-Schreibrechte)
+      #   CLOUDFLARE_API_TOKEN  (Workers/R2-Schreibrechte für Deploy)
       #   CLOUDFLARE_ACCOUNT_ID (160ce2ed549950c2f2bf191ab93b3e45)
-      - name: Apply D1 migrations
-        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.110.0"
-          command: >
-            d1 execute flashcards-db --remote
-            --command "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users(email COLLATE NOCASE);"
-
       - name: Deploy Worker + Assets
         if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
