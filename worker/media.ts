@@ -75,6 +75,30 @@ export async function handleMediaGet(req: AuthedRequest, env: Env): Promise<Resp
 // Spart redundante Uploads. Wichtig: nicht die bloße D1-Zeile als "vorhanden" werten — eine
 // Metazeile ohne zugehöriges R2-Objekt würde den Client fälschlich als synced markieren,
 // und das Bild käme nie auf andere Geräte. Ohne R2 wird nichts als vorhanden gemeldet.
+export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Response> {
+  if (!env.MEDIA) return json({ error: 'R2 storage not enabled' }, { status: 503 });
+  const noteRows = await env.DB.prepare(
+    "SELECT payload FROM sync_objects WHERE user_id = ? AND entity = 'note' AND deleted = 0",
+  ).bind(req.userId).all<{ payload: string }>();
+  const referenced = new Set<string>();
+  for (const row of noteRows.results) {
+    try {
+      const fields = JSON.parse(row.payload)?.fields ?? {};
+      for (const value of Object.values(fields)) {
+        for (const match of String(value).matchAll(/flashmedia:([a-f0-9]{64})/g)) referenced.add(match[1]);
+      }
+    } catch { /* corrupt payload is ignored; it must not delete data */ }
+  }
+  const rows = await env.DB.prepare('SELECT sha256, r2_key FROM media WHERE user_id = ?').bind(req.userId)
+    .all<{ sha256: string; r2_key: string }>();
+  const stale = rows.results.filter((row) => !referenced.has(row.sha256));
+  for (const row of stale) {
+    await env.MEDIA.delete(row.r2_key);
+    await env.DB.prepare('DELETE FROM media WHERE user_id = ? AND sha256 = ?').bind(req.userId, row.sha256).run();
+  }
+  return json({ deleted: stale.length });
+}
+
 export async function handleMediaExists(req: AuthedRequest, env: Env): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as { hashes?: unknown };
   const hashes = Array.isArray(body.hashes) ? body.hashes.filter((h): h is string => typeof h === 'string') : [];

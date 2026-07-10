@@ -8,7 +8,7 @@ import type { Table } from 'dexie';
 import { db } from '../db/db';
 import type { Card, RevlogEntry } from '../db/db';
 import { ensureSeed } from '../db/seed';
-import { ensureMediaForHtml, uploadPendingMedia } from './media';
+import { ensureMediaForHtml, garbageCollectRemoteMedia, uploadPendingMedia } from './media';
 
 type Row = Record<string, unknown>;
 
@@ -269,7 +269,11 @@ async function runSync(): Promise<void> {
     await pullAll(auth.token); // Cursor über eigene Writes hinweg settlen
 
     // Medien: lokale Blobs hochladen (R2; 503-tolerant) + fehlende Bilder nachladen.
-    await uploadPendingMedia(BASE, auth.token);
+    const mediaResult = await uploadPendingMedia(BASE, auth.token);
+    if (mediaResult.failed > 0) {
+      throw new Error(`${mediaResult.failed} Bild(er) konnten nicht synchronisiert werden.`);
+    }
+    await garbageCollectRemoteMedia(BASE, auth.token);
     // Über ALLE lokalen Notizen prüfen (nicht nur die in diesem Pull berührten): ein
     // einzelner Fehlversuch (Netzwerk-Hänger, R2 kurzzeitig 503) darf ein Bild nicht
     // dauerhaft unerreichbar machen — ensureMediaForHtml überspringt ohnehin Hashes, die

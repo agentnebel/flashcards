@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db } from '../db/db';
-import { addNote, updateNote } from '../db/api';
+import { addNote, gcOrphanedMedia, updateNote } from '../db/api';
 import { mediaUrl, resolveMediaHtml, storeImage } from '../lib/media';
 import { renderMarkdown } from '../lib/markdown';
 import { sanitizeHtml } from '../lib/sanitize';
@@ -77,6 +77,13 @@ export default function AddCard() {
   }, [noteTypes, noteTypeId, isEdit]);
 
   const nt = useMemo(() => noteTypes?.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
+
+  useEffect(() => {
+    if (saved || !Object.values(fields).some((value) => value.trim())) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [fields, saved]);
 
   // Felder zurücksetzen, sobald der AUSGEWÄHLTE Notiztyp nicht mehr zu dem passt, für den
   // `fields` zuletzt gesetzt wurde. Deckt zwei Fälle ab: (1) neue Karte, Notiztyp-Dropdown
@@ -170,11 +177,18 @@ export default function AddCard() {
     setFields((prev) => ({ ...prev, [field]: removeMediaTag(prev[field] ?? '', hash) }));
   }
 
+  function changeNoteType(nextId: string) {
+    if (nextId === noteTypeId) return;
+    if (Object.values(fields).some((value) => value.trim()) && !window.confirm('Der Wechsel des Notiztyps verwirft nicht gespeicherte Feldinhalte. Fortfahren?')) return;
+    setNoteTypeId(nextId);
+  }
+
   async function onSave() {
-    if (!nt || !deckId) return;
+    if (!nt || !deckId || busyField) return;
     try {
       if (isEdit && noteId) {
         await updateNote(noteId, fields, deckId, noteTypeId);
+        await gcOrphanedMedia();
         setSaved(true);
         setTimeout(() => { setSaved(false); navigate('/app/browse'); }, 1000);
       } else {
@@ -209,7 +223,7 @@ export default function AddCard() {
 
       <div className="field">
         <label className="field-label" htmlFor="ac-nt">Notiztyp</label>
-        <select id="ac-nt" value={noteTypeId} onChange={(e) => setNoteTypeId(e.target.value)}>
+        <select id="ac-nt" value={noteTypeId} onChange={(e) => changeNoteType(e.target.value)}>
           {noteTypes.map((t) => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
@@ -277,8 +291,8 @@ export default function AddCard() {
         );
       })}
 
-      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave} onClick={() => void onSave()}>
-        {saved ? '✓ Gespeichert' : isEdit ? 'Änderungen speichern' : 'Karte speichern'}
+      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave || busyField !== null} onClick={() => void onSave()}>
+        {busyField ? 'Bild wird verarbeitet…' : saved ? '✓ Gespeichert' : isEdit ? 'Änderungen speichern' : 'Karte speichern'}
       </button>
     </div>
   );

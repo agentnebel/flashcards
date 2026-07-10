@@ -22,56 +22,27 @@ export function ensureSeed(): Promise<void> {
 }
 
 async function ensureSeedInner(): Promise<void> {
-  const deckCount = await db.decks.count();
-  const ntCount = await db.noteTypes.count();
-  const now = Date.now();
+  // Seed-Daten sind Bootstrap, keine frischeren Benutzeränderungen. Ein fester alter
+  // Zeitstempel lässt beim erneuten Login die serverseitige Version gewinnen.
+  const seededAt = 0;
+  await db.transaction('rw', db.decks, db.noteTypes, db.outbox, async () => {
+    const deckCount = await db.decks.count();
+    const ntCount = await db.noteTypes.count();
 
-  if (ntCount === 0) {
-    const types: NoteType[] = [
-      {
-        id: 'nt-basic',
-        name: 'Einfach',
-        kind: 'standard',
-        fields: ['Vorderseite', 'Rückseite'],
-        templates: [
-          { name: 'Karte 1', qfmt: '{{Vorderseite}}', afmt: '{{FrontSide}}<hr>{{Rückseite}}' },
-        ],
-        css: DEFAULT_CSS,
-        updatedAt: now,
-      },
-      {
-        id: 'nt-basic-reversed',
-        name: 'Einfach (+ Umkehrung)',
-        kind: 'standard',
-        fields: ['Vorderseite', 'Rückseite'],
-        templates: [
-          { name: 'Karte 1', qfmt: '{{Vorderseite}}', afmt: '{{FrontSide}}<hr>{{Rückseite}}' },
-          { name: 'Karte 2', qfmt: '{{Rückseite}}', afmt: '{{FrontSide}}<hr>{{Vorderseite}}' },
-        ],
-        css: DEFAULT_CSS,
-        updatedAt: now,
-      },
-      {
-        id: 'nt-cloze',
-        name: 'Lückentext (Cloze)',
-        kind: 'cloze',
-        fields: ['Text', 'Extra'],
-        templates: [{ name: 'Cloze', qfmt: '{{cloze:Text}}', afmt: '{{cloze:Text}}<hr>{{Extra}}' }],
-        css: DEFAULT_CSS,
-        updatedAt: now,
-      },
-    ];
-    await db.noteTypes.bulkAdd(types);
-  }
+    if (ntCount === 0) {
+      const types: NoteType[] = [
+        { id: 'nt-basic', name: 'Einfach', kind: 'standard', fields: ['Vorderseite', 'Rückseite'], templates: [{ name: 'Karte 1', qfmt: '{{Vorderseite}}', afmt: '{{FrontSide}}<hr>{{Rückseite}}' }], css: DEFAULT_CSS, updatedAt: seededAt },
+        { id: 'nt-basic-reversed', name: 'Einfach (+ Umkehrung)', kind: 'standard', fields: ['Vorderseite', 'Rückseite'], templates: [{ name: 'Karte 1', qfmt: '{{Vorderseite}}', afmt: '{{FrontSide}}<hr>{{Rückseite}}' }, { name: 'Karte 2', qfmt: '{{Rückseite}}', afmt: '{{FrontSide}}<hr>{{Vorderseite}}' }], css: DEFAULT_CSS, updatedAt: seededAt },
+        { id: 'nt-cloze', name: 'Lückentext (Cloze)', kind: 'cloze', fields: ['Text', 'Extra'], templates: [{ name: 'Cloze', qfmt: '{{cloze:Text}}', afmt: '{{cloze:Text}}<hr>{{Extra}}' }], css: DEFAULT_CSS, updatedAt: seededAt },
+      ];
+      await db.noteTypes.bulkAdd(types);
+      for (const type of types) await db.outbox.add({ op: 'upsert', entity: 'noteType', entityId: type.id, payload: type, createdAt: seededAt });
+    }
 
-  if (deckCount === 0) {
-    const deck: Deck = {
-      id: 'deck-default',
-      name: 'Standard',
-      parentId: null,
-      newPerDay: 20,
-      updatedAt: now,
-    };
-    await db.decks.add(deck);
-  }
+    if (deckCount === 0) {
+      const deck: Deck = { id: 'deck-default', name: 'Standard', parentId: null, newPerDay: 20, updatedAt: seededAt };
+      await db.decks.add(deck);
+      await db.outbox.add({ op: 'upsert', entity: 'deck', entityId: deck.id, payload: deck, createdAt: seededAt });
+    }
+  });
 }

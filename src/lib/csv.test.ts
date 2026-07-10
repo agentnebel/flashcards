@@ -10,6 +10,10 @@ describe('detectDelimiter', () => {
   it('zählt Trennzeichen in Anführungszeichen nicht mit', () => {
     expect(detectDelimiter('"a;b;c;d;e"\tx\n"1;2;3;4;5"\ty')).toBe('\t');
   });
+  it('bevorzugt den strukturell konsistenten Trenner gegenüber häufigen Feldzeichen', () => {
+    const csv = 'Front,Back\nalpha;beta;gamma,Antwort\ndelta;epsilon;zeta,Antwort';
+    expect(detectDelimiter(csv)).toBe(',');
+  });
 });
 
 describe('parseDelimited', () => {

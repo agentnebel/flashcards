@@ -2,7 +2,7 @@ import { AutoRouter, json } from 'itty-router';
 import type { IRequest } from 'itty-router';
 import { handleLogin, handleRegister, requireAuth } from './auth';
 import { handlePull, handlePush } from './sync';
-import { handleMediaExists, handleMediaGet, handleMediaUpload } from './media';
+import { handleMediaExists, handleMediaGc, handleMediaGet, handleMediaUpload } from './media';
 
 export interface Env {
   ASSETS: Fetcher;
@@ -27,6 +27,7 @@ router
   .post('/sync/push', requireAuth, handlePush)
   .post('/media/upload', requireAuth, handleMediaUpload)
   .post('/media/exists', requireAuth, handleMediaExists)
+  .post('/media/gc', requireAuth, handleMediaGc)
   .get('/media/:hash', requireAuth, handleMediaGet);
 
 export default {

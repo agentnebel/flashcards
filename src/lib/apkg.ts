@@ -16,6 +16,7 @@ import { generateCards } from './cardgen';
 import { uuid } from '../db/ids';
 
 const FIELD_SEP = '';
+const MAX_APKG_BYTES = 100 * 1024 * 1024;
 const IMG_RE = /(<img\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi;
 
 export interface ApkgResult {
@@ -84,6 +85,7 @@ async function imageSize(blob: Blob): Promise<{ width: number; height: number }>
 }
 
 export async function importApkg(file: File, deckId: string): Promise<ApkgResult> {
+  if (file.size > MAX_APKG_BYTES) throw new Error('Die .apkg-Datei ist zu groß (max. 100 MB).');
   const warnings: string[] = [];
   const now = Date.now();
   const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));

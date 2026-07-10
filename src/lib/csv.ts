@@ -6,32 +6,24 @@ function stripBom(s: string): string {
   return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
 }
 
-// Zählt ein Kandidaten-Trennzeichen nur außerhalb von Anführungszeichen.
-function countOutsideQuotes(s: string, delim: string): number {
-  let inQuotes = false;
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === '"') {
-      if (inQuotes && s[i + 1] === '"') { i++; continue; } // escaptes ""
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (!inQuotes && c === delim) n++;
-  }
-  return n;
-}
-
 export function detectDelimiter(text: string): string {
   const sample = stripBom(text).slice(0, 5000);
   const candidates = [',', '\t', ';'];
   let best = ',';
-  let bestCount = -1;
-  for (const d of candidates) {
-    const count = countOutsideQuotes(sample, d);
-    if (count > bestCount) {
-      bestCount = count;
-      best = d;
+  let bestScore = -Infinity;
+  for (const delimiter of candidates) {
+    const rows = parseDelimited(sample, delimiter);
+    if (rows.length === 0) continue;
+    const widths = rows.map((row) => row.length);
+    const counts = new Map<number, number>();
+    for (const width of widths) counts.set(width, (counts.get(width) ?? 0) + 1);
+    const [modeWidth, modeCount] = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
+    // Eine echte CSV-Spalte liefert über mehrere Zeilen dieselbe Breite. Häufige
+    // Satzzeichen in Feldinhalten dagegen erzeugen meist uneinheitliche Zeilenbreiten.
+    const score = modeCount * 100 + modeWidth;
+    if (score > bestScore) {
+      bestScore = score;
+      best = delimiter;
     }
   }
   return best;

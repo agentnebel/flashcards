@@ -128,7 +128,7 @@ function CsvSection({
   }
 
   async function onImport() {
-    if (!nt || !deckId || !parsed) return;
+    if (!nt || !deckId || !parsed || !fieldMap.some((column) => column >= 0)) return;
     setBusy(true);
     setResult(null);
     try {
@@ -226,7 +226,7 @@ function CsvSection({
               </div>
             )}
 
-            <button className="primary block" disabled={busy || dataCount === 0} onClick={onImport}>
+            <button className="primary block" disabled={busy || dataCount === 0 || !fieldMap.some((column) => column >= 0)} onClick={onImport}>
               {busy ? 'Importiere…' : `${dataCount} Zeile(n) importieren`}
             </button>
           </div>

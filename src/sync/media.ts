@@ -68,12 +68,8 @@ export async function uploadPendingMedia(
         await markSynced(m.hash);
         uploaded += 1;
       } else if (res.status === 415 || res.status === 413) {
-        // Dauerhaft abgelehnt (falscher Dateityp z. B. SVG, oder über dem 15-MB-Limit) —
-        // ein erneuter Versuch würde nie klappen. Ohne diese Markierung würde der komplette
-        // Blob bei jedem Auto-Sync (alle 60 s) erneut hochgeladen, für die Lebensdauer des
-        // Kontos. Als synced markieren und aufgeben (Bild bleibt lokal sichtbar, syncht aber
-        // nicht auf andere Geräte).
-        await markSynced(m.hash);
+        // Nicht als synchronisiert markieren: Ein Quota- oder Formatfehler darf nicht
+        // dazu führen, dass andere Geräte das Bild dauerhaft nie erhalten.
         failed += 1;
       } else {
         // 503 (R2 deaktiviert) o. Ä. → offen lassen, später erneut versuchen.
@@ -86,6 +82,11 @@ export async function uploadPendingMedia(
   }
 
   return { uploaded, failed };
+}
+
+export async function garbageCollectRemoteMedia(baseUrl: string, token: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/media/gc`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok && res.status !== 503) throw new Error(`Medienbereinigung fehlgeschlagen (${res.status})`);
 }
 
 async function markSynced(hash: string): Promise<void> {

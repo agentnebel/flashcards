@@ -57,7 +57,10 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
       // Konfliktauflösung serverautoritativ per Inhalts-updatedAt (statt reiner Ankunftsreihenfolge).
       const payloadUpdatedAt = payloadObj && typeof payloadObj.updatedAt === 'number' ? payloadObj.updatedAt : null;
       const mutationCreatedAt = typeof m.createdAt === 'number' ? m.createdAt : null;
-      const clientUpdatedAt = payloadUpdatedAt ?? mutationCreatedAt ?? now;
+      const rawUpdatedAt = payloadUpdatedAt ?? mutationCreatedAt ?? now;
+      // Geräteuhren dürfen Konflikte nicht auf Jahre blockieren. Kleine Abweichungen
+      // bleiben erhalten, weit in der Zukunft liegende Werte werden servernah gekappt.
+      const clientUpdatedAt = Math.min(rawUpdatedAt, now + 5 * 60_000);
       return [
         env.DB.prepare(
           'INSERT INTO change_log (user_id, entity, entity_id, op, changed_at) VALUES (?,?,?,?,?) RETURNING seq',

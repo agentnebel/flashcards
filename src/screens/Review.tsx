@@ -34,7 +34,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   const { deckId } = useParams<{ deckId: string }>();
   const cram = mode === 'cram';
   const [queue, setQueue] = useState<Card[] | null>(null);
-  const [rendered, setRendered] = useState<{ front: string; back: string } | null>(null);
+  const [rendered, setRendered] = useState<{ front: string; back: string; css: string } | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [retention, setRetention] = useState(0.9);
   const [done, setDone] = useState(0);
@@ -140,7 +140,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       resolveMediaHtml(raw.front),
       resolveMediaHtml(raw.back),
     ]);
-    return { front, back };
+    return { front, back, css: nt.css };
   }, []);
 
   // Aktuelle Karte rendern; nächste Karte vorab laden.
@@ -376,9 +376,10 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
+          <style>{rendered?.css ?? ''}</style>
           <div
             key={faceHtml ? (revealed ? 'back' : 'front') : 'loading'}
-            className="face"
+            className="face card"
             dangerouslySetInnerHTML={faceHtml ? { __html: faceHtml } : undefined}
           >
             {!faceHtml ? <span className="muted">Lädt…</span> : null}

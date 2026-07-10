@@ -152,8 +152,14 @@ export async function updateNote(
         await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
       }
       for (const c of cardChanges.upsert) {
-        await db.cards.put(c);
-        await db.outbox.add({ op: 'upsert', entity: 'card', entityId: c.id, payload: c, createdAt: now });
+        const latest = await db.cards.get(c.id);
+        // Beim parallelen Bewerten kann sich nur der FSRS-State ändern. Metadaten
+        // (Deck/NoteType) übernehmen, aber den aktuelleren Scheduler-State bewahren.
+        const merged = latest
+          ? { ...c, fsrs: latest.fsrs, due: latest.due, updatedAt: Math.max(now, latest.updatedAt) }
+          : c;
+        await db.cards.put(merged);
+        await db.outbox.add({ op: 'upsert', entity: 'card', entityId: merged.id, payload: merged, createdAt: now });
       }
     });
   }
@@ -161,8 +167,8 @@ export async function updateNote(
 
 export async function deleteNote(noteId: string): Promise<void> {
   const now = Date.now();
-  const cards = await db.cards.where('noteId').equals(noteId).toArray();
   await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+    const cards = await db.cards.where('noteId').equals(noteId).toArray();
     await db.notes.delete(noteId);
     await db.cards.where('noteId').equals(noteId).delete();
     await db.outbox.add({ op: 'delete', entity: 'note', entityId: noteId, payload: null, createdAt: now });
@@ -170,7 +176,7 @@ export async function deleteNote(noteId: string): Promise<void> {
       await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
     }
   });
-  await gcOrphanedMedia(); // jetzt unreferenzierte Bilder lokal entfernen
+  await gcOrphanedMedia();
 }
 
 // Massenimport (CSV/TSV): erzeugt Notizen + Karten + Outbox-Einträge in Batches.
@@ -276,10 +282,13 @@ export async function getDescendantDeckIds(deckId: string): Promise<string[]> {
     }
   }
   const out = [deckId];
+  const seen = new Set(out);
   const stack = [deckId];
   while (stack.length) {
     const cur = stack.pop() as string;
     for (const child of childrenByParent.get(cur) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
       out.push(child);
       stack.push(child);
     }
@@ -473,8 +482,12 @@ interface BackupFile {
 // Merge-Semantik: bulkPut (gleiche id überschreibt). Alle Einträge werden in die Outbox
 // gestellt, damit ein Restore beim nächsten Sync auch auf die anderen Geräte gelangt.
 export async function importBackup(json: string): Promise<{ decks: number; notes: number; cards: number; media: number }> {
+  if (json.length > 100 * 1024 * 1024) throw new Error('Backup ist zu groß (max. 100 MB).');
   const data = JSON.parse(json) as BackupFile;
-  if (!data || typeof data !== 'object') throw new Error('Ungültige Backup-Datei');
+  if (!data || typeof data !== 'object' ||
+    ![data.decks, data.noteTypes, data.notes, data.cards, data.revlog, data.media].every((value) => value === undefined || Array.isArray(value))) {
+    throw new Error('Ungültige Backup-Datei');
+  }
 
   const reviveCard = (c: Card): Card => {
     const f = c.fsrs as unknown as { due: unknown; last_review?: unknown };
