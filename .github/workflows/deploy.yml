@@ -33,6 +33,14 @@ jobs:
       # Secrets setzen: Repo → Settings → Secrets and variables → Actions
       #   CLOUDFLARE_API_TOKEN  (Workers/D1/R2-Schreibrechte)
       #   CLOUDFLARE_ACCOUNT_ID (160ce2ed549950c2f2bf191ab93b3e45)
+      - name: Apply D1 migrations
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute flashcards-db --remote --file=./worker/migrations/0002_users_email_nocase.sql
+
       - name: Deploy Worker + Assets
         if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
