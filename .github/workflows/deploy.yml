@@ -40,7 +40,9 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.110.0"
-          command: d1 execute flashcards-db --remote --file=./worker/migrations/0002_users_email_nocase.sql
+          command: >
+            d1 execute flashcards-db --remote
+            --command "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users(email COLLATE NOCASE);"
 
       - name: Deploy Worker + Assets
         if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
