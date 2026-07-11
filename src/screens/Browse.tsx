@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, type Card, type Deck, type Note } from '../db/db';
-import { deleteNote } from '../db/api';
+import { deleteDeck, deleteNote, getDescendantDeckIds } from '../db/api';
 import { stripMarkdown } from '../lib/markdown';
 import { State } from 'ts-fsrs';
 
@@ -61,6 +61,7 @@ export default function Browse() {
   const [q, setQ] = useState('');
   const [visible, setVisible] = useState(PAGE);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [deletingDeckId, setDeletingDeckId] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
@@ -151,6 +152,35 @@ export default function Browse() {
     void deleteNote(n.id);
   }
 
+  async function handleDeleteDeck(deckId: string) {
+    const deck = deckById.get(deckId);
+    if (!deck || !notes || !cards || deletingDeckId) return;
+
+    const deckIds = new Set(await getDescendantDeckIds(deckId));
+    const noteCount = notes.filter((note) => deckIds.has(note.deckId) && !note.deleted).length;
+    const cardCount = cards.filter((card) => deckIds.has(card.deckId) && !card.deleted).length;
+    const childCount = deckIds.size - 1;
+    const contents = [
+      childCount > 0 ? `${childCount} Unterdeck${childCount === 1 ? '' : 's'}` : null,
+      `${noteCount} Notiz${noteCount === 1 ? '' : 'en'}`,
+      `${cardCount} Karte${cardCount === 1 ? '' : 'n'}`,
+    ].filter(Boolean).join(', ');
+    const confirmed = window.confirm(
+      `Deck „${deck.name}" vollständig löschen?\n\nDamit werden ${contents} und die zugehörige Lernhistorie dauerhaft gelöscht.`,
+    );
+    if (!confirmed) return;
+
+    setDeletingDeckId(deckId);
+    try {
+      await deleteDeck(deckId);
+    } catch (error) {
+      console.error('Deck konnte nicht gelöscht werden', error);
+      window.alert('Das Deck konnte nicht vollständig gelöscht werden. Bitte versuche es erneut.');
+    } finally {
+      setDeletingDeckId(null);
+    }
+  }
+
   function toggle(deckId: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -177,22 +207,35 @@ export default function Browse() {
     if (it.kind === 'header') {
       flush();
       const isCollapsed = !searching && collapsed.has(it.deckId);
+      const deckName = deckById.get(it.deckId)?.name ?? it.path;
       blocks.push(
-        <button
-          key={`h-${it.deckId}`}
-          className={`browse-sec${isCollapsed ? '' : ' open'}`}
-          aria-expanded={!isCollapsed}
-          onClick={() => toggle(it.deckId)}
-        >
-          <svg className="sec-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M9 6l6 6-6 6" />
-          </svg>
-          <svg className="sec-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          </svg>
-          <span className="sec-name">{it.path}</span>
-          <span className="sec-count">{it.count}</span>
-        </button>,
+        <div className="browse-sec-row" key={`h-${it.deckId}`}>
+          <button
+            className={`browse-sec${isCollapsed ? '' : ' open'}`}
+            aria-expanded={!isCollapsed}
+            onClick={() => toggle(it.deckId)}
+          >
+            <svg className="sec-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+            <svg className="sec-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            <span className="sec-name">{it.path}</span>
+            <span className="sec-count">{it.count}</span>
+          </button>
+          <button
+            className="icon-btn destructive browse-sec-delete"
+            disabled={deletingDeckId !== null}
+            onClick={() => void handleDeleteDeck(it.deckId)}
+            title="Deck vollständig löschen"
+            aria-label={`Deck „${deckName}" vollständig löschen`}
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+            </svg>
+          </button>
+        </div>,
       );
       bufKey = it.deckId;
     } else {

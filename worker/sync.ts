@@ -26,13 +26,12 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
   const now = Date.now();
 
   // Validierung vorab: nur bekannte Entitäten (verhindert, dass ein bösartiger/fehlerhafter
-  // Client Fremd-Entitäten in den Feed schreibt), Revlog append-only (keine Deletes),
-  // Upsert-Payload muss zur entityId passen (Clients indexieren lokal auf payload.id;
+  // Client Fremd-Entitäten in den Feed schreibt). Die Upsert-Payload muss zur entityId
+  // passen (Clients indexieren lokal auf payload.id;
   // eine Abweichung würde LWW-/Dedup-Prüfungen auf anderen Geräten umgehen).
   const valid = mutations.filter((m) => {
     if (!m || !m.entity || !m.entityId || (m.op !== 'upsert' && m.op !== 'delete')) return false;
     if (!ALLOWED_ENTITIES.has(m.entity)) return false;
-    if (m.entity === 'revlog' && m.op === 'delete') return false;
     if (m.op === 'upsert' && m.payload && typeof m.payload === 'object') {
       const id = (m.payload as Record<string, unknown>).id;
       if (typeof id === 'string' && id !== m.entityId) return false;

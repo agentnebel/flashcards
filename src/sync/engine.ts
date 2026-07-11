@@ -1,8 +1,8 @@
 // Client-Sync-Schleife (M2): Auth + Delta-Sync gegen die eigene JSON-API.
 //
 // Ablauf von sync(): pull (remote anwenden) → push (Outbox senden) → pull (Cursor
-// settlen) → Medien-Sync. Konflikte: Last-Write-Wins per `updatedAt`. Reviews/Revlog
-// sind append-only. Der Cursor (change_log-seq) und das Auth-Token liegen in `meta`.
+// settlen) → Medien-Sync. Konflikte: Last-Write-Wins per `updatedAt`. Revlogs werden nur
+// beim Löschen ihrer Notiz bzw. ihres Decks entfernt. Cursor und Auth-Token liegen in `meta`.
 
 import type { Table } from 'dexie';
 import { db } from '../db/db';

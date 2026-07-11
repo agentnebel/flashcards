@@ -85,11 +85,14 @@ export async function deleteDeck(deckId: string): Promise<void> {
   // dem Lesen und dem Löschen eine parallele Schreibung (z. B. ein laufender Sync-Pull)
   // eine neue Notiz/Karte in einem der Decks anlegen, die dann ohne Tombstone lokal
   // gelöscht würde und beim nächsten Sync als Geisterobjekt zurückkäme.
-  await db.transaction('rw', db.decks, db.notes, db.cards, db.outbox, async () => {
+  await db.transaction('rw', db.decks, db.notes, db.cards, db.revlog, db.outbox, async () => {
     const [notes, cards] = await Promise.all([
       Promise.all(deckIds.map((id) => db.notes.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
       Promise.all(deckIds.map((id) => db.cards.where('deckId').equals(id).toArray())).then((rows) => rows.flat()),
     ]);
+    const revlogs = cards.length
+      ? await db.revlog.where('cardId').anyOf(cards.map((card) => card.id)).toArray()
+      : [];
     await db.decks.bulkDelete(deckIds);
     for (const id of deckIds) {
       await db.notes.where('deckId').equals(id).delete();
@@ -101,6 +104,10 @@ export async function deleteDeck(deckId: string): Promise<void> {
     }
     for (const c of cards) {
       await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
+    }
+    await db.revlog.bulkDelete(revlogs.map((entry) => entry.id));
+    for (const entry of revlogs) {
+      await db.outbox.add({ op: 'delete', entity: 'revlog', entityId: entry.id, payload: null, createdAt: now });
     }
   });
   await gcOrphanedMedia(); // jetzt unreferenzierte Bilder lokal entfernen
@@ -167,13 +174,20 @@ export async function updateNote(
 
 export async function deleteNote(noteId: string): Promise<void> {
   const now = Date.now();
-  await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+  await db.transaction('rw', db.notes, db.cards, db.revlog, db.outbox, async () => {
     const cards = await db.cards.where('noteId').equals(noteId).toArray();
+    const revlogs = cards.length
+      ? await db.revlog.where('cardId').anyOf(cards.map((card) => card.id)).toArray()
+      : [];
     await db.notes.delete(noteId);
     await db.cards.where('noteId').equals(noteId).delete();
+    await db.revlog.bulkDelete(revlogs.map((entry) => entry.id));
     await db.outbox.add({ op: 'delete', entity: 'note', entityId: noteId, payload: null, createdAt: now });
     for (const c of cards) {
       await db.outbox.add({ op: 'delete', entity: 'card', entityId: c.id, payload: null, createdAt: now });
+    }
+    for (const entry of revlogs) {
+      await db.outbox.add({ op: 'delete', entity: 'revlog', entityId: entry.id, payload: null, createdAt: now });
     }
   });
   await gcOrphanedMedia();
