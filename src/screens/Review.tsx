@@ -10,6 +10,7 @@ import {
   getStudyQueue,
   scheduleCard,
 } from '../db/api';
+import { scopeImportedCardCss } from '../lib/cardCss';
 import { renderCard } from '../lib/cardgen';
 import { resolveMediaHtml } from '../lib/media';
 import { fmtInterval } from '../scheduler/fsrs';
@@ -30,12 +31,53 @@ function buzz(ms: number) {
 
 const SWIPE_THRESHOLD = 90; // px bis eine Geste als Bewertung zählt
 
+const TEXT_INPUT_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+const NATIVE_ACTION_SELECTOR = 'a, button, summary, details, [role="button"], [role="link"]';
+
+// Globale Lern-Shortcuts dürfen native Keyboard-Aktionen nicht übersteuern:
+// Enter auf „Decks" muss navigieren und Enter auf einem Bewertungsbutton dessen eigene
+// Bewertung auslösen. In Textfeldern sind sämtliche Lern-Shortcuts deaktiviert.
+export function shouldHandleReviewShortcut(key: string, target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  if (target.closest(TEXT_INPUT_SELECTOR)) return false;
+  if ((key === 'Enter' || key === ' ') && target.closest(NATIVE_ACTION_SELECTOR)) return false;
+  return true;
+}
+
+export function typedAnswerMatches(given: string, expected: string): boolean {
+  const normalize = (value: string) =>
+    value.normalize('NFKC').trim().replace(/\s+/g, ' ');
+  return normalize(given) === normalize(expected);
+}
+
+// Frisch fällige Karten anhängen, ohne die bereits sichtbare Karte zu ersetzen. Bleibt
+// nichts hinzuzufügen, wird bewusst dieselbe Array-Referenz zurückgegeben.
+export function mergeStudyQueue(
+  currentQueue: Card[],
+  fresh: Card[],
+  answeredIds: ReadonlySet<string>,
+  skippedIds: ReadonlySet<string>,
+): Card[] {
+  const existing = new Set(currentQueue.map((card) => card.id));
+  const toAdd = fresh.filter(
+    (card) => !existing.has(card.id) && !answeredIds.has(card.id) && !skippedIds.has(card.id),
+  );
+  return toAdd.length ? [...currentQueue, ...toAdd] : currentQueue;
+}
+
 export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) {
   const { deckId } = useParams<{ deckId: string }>();
   const cram = mode === 'cram';
   const [queue, setQueue] = useState<Card[] | null>(null);
-  const [rendered, setRendered] = useState<{ front: string; back: string; css: string } | null>(null);
+  const [rendered, setRendered] = useState<{
+    front: string;
+    back: string;
+    css: string;
+    typeAnswer?: string;
+  } | null>(null);
   const [revealed, setRevealed] = useState(false);
+  const [typedAnswer, setTypedAnswer] = useState('');
+  const [committing, setCommitting] = useState(false);
   const [retention, setRetention] = useState(0.9);
   const [done, setDone] = useState(0);
   const [drag, setDrag] = useState(0); // aktuelle horizontale Swipe-Verschiebung
@@ -44,8 +86,9 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
 
   const current = queue?.[0] ?? null;
 
-  // FSRS-Plan EINMAL pro Karte berechnen (gleiches `now` für Vorschau und späteres Speichern).
-  // Im Cram-Modus nicht nötig – dort wird nichts geplant/gespeichert.
+  // FSRS-Vorschau pro Karte berechnen. Beim tatsächlichen Bewerten wird der Plan mit dem
+  // dann aktuellen Zeitpunkt erneut berechnet, damit Revlog und Fälligkeit nicht auf dem
+  // Zeitpunkt hängen bleiben, zu dem die Karte erstmals angezeigt wurde.
   const schedule = useMemo<RecordLog | null>(
     () => (current && !cram ? scheduleCard(current, retention) : null),
     [current, retention, cram],
@@ -57,6 +100,13 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   // verhindert, dass ein Reload eine gerade (write-behind) beantwortete Karte zurückholt,
   // bevor der DB-Write committet ist.
   const answeredIds = useRef<Set<string>>(new Set());
+  // Ein gemeinsamer Guard sperrt direkte Bewertungen und die verzögerte Swipe-
+  // Bewertung. Auch Cram darf durch Swipe + Button/Shortcut nicht zwei Karten
+  // in einem Übergang weiterschalten.
+  const answeringRef = useRef(false);
+  const swipeTimerRef = useRef<number | null>(null);
+  const unlockTimerRef = useRef<number | null>(null);
+  const [transitioning, setTransitioning] = useState(false);
   // Lokal kaputte/orphan Karten (fehlende Note oder NoteType) pro Session merken. Sonst lädt
   // die Empty-Queue-Logik dieselbe Karte sofort wieder und der Screen skippt im Kreis.
   const skippedIds = useRef<Set<string>>(new Set());
@@ -90,11 +140,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       const fresh = await getStudyQueue(deckId);
       setQueue((q) => {
         const cur = q ?? [];
-        const existing = new Set(cur.map((c) => c.id));
-        const toAdd = fresh.filter(
-          (c) => !existing.has(c.id) && !answeredIds.current.has(c.id) && !skippedIds.current.has(c.id),
-        );
-        return toAdd.length ? [...cur, ...toAdd] : cur;
+        return mergeStudyQueue(cur, fresh, answeredIds.current, skippedIds.current);
       });
     }, 20_000);
     return () => window.clearInterval(timer);
@@ -140,16 +186,19 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
       resolveMediaHtml(raw.front),
       resolveMediaHtml(raw.back),
     ]);
-    return { front, back, css: nt.css };
+    return { front, back, css: nt.css, typeAnswer: raw.typeAnswer };
   }, []);
 
-  // Aktuelle Karte rendern; nächste Karte vorab laden.
+  // Nur ein Wechsel der aktuellen Karte setzt Reveal-/Swipe-State zurück. Ein bloßes
+  // Anhängen neu fälliger Karten an die Queue darf die sichtbare Karte nicht umdrehen.
   useEffect(() => {
     let alive = true;
     (async () => {
       if (!current) { setRendered(null); return; }
       setRendered(null);
       setRevealed(false);
+      setTypedAnswer('');
+      setCommitting(false);
       setDrag(0);
       setLeaving(null);
       const r = await renderFor(current);
@@ -164,23 +213,52 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         return;
       }
       setRendered(r);
-      // Prefetch: Medien der nächsten Karte im Hintergrund auflösen (Cache wärmt sich).
-      const next = queue?.[1];
-      if (next) void renderFor(next);
     })();
     return () => { alive = false; };
-  }, [current, renderFor, queue]);
+  }, [current, renderFor]);
+
+  // Prefetch getrennt vom Render-State: die nächste Karte darf sich durch einen Queue-
+  // Refresh ändern, ohne `revealed` der aktuellen Karte zurückzusetzen.
+  const next = queue?.[1] ?? null;
+  useEffect(() => {
+    if (next) void renderFor(next);
+  }, [next, renderFor]);
+
+  const releaseAnswerLock = useCallback(() => {
+    answeringRef.current = false;
+    setTransitioning(false);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (swipeTimerRef.current !== null) window.clearTimeout(swipeTimerRef.current);
+      if (unlockTimerRef.current !== null) window.clearTimeout(unlockTimerRef.current);
+      answeringRef.current = false;
+    },
+    [],
+  );
 
   const onAnswer = useCallback(
-    (grade: Grade) => {
-      if (!current) return;
-      buzz(grade === Rating.Again ? 18 : 10);
+    (grade: Grade, swipeLockHeld = false) => {
+      if (!current) {
+        if (swipeLockHeld) releaseAnswerLock();
+        return;
+      }
+      if (answeringRef.current && !swipeLockHeld) return;
+      if (!swipeLockHeld) answeringRef.current = true;
 
       // Cram-/Wiederholungsmodus: KEINE FSRS-/Revlog-Änderung. „Nochmal" hängt die Karte ans
       // Ende der Session-Schlange (später erneut zeigen), alles andere geht weiter.
       if (cram) {
+        setTransitioning(true);
+        buzz(grade === Rating.Again ? 18 : 10);
         setRevealed(false); // deckt den 1-Karten-Fall ab, in dem `current` gleich bleibt
+        setTypedAnswer('');
         if (grade === Rating.Again) {
+          // Bei genau einer Karte bleibt `current` identisch; deshalb würde der Render-
+          // Effekt nicht erneut laufen. Swipe-State hier explizit zurücksetzen.
+          setDrag(0);
+          setLeaving(null);
           setQueue((q) => {
             const a = q ?? [];
             return a.length > 1 ? [...a.slice(1), a[0]] : a; // bei nur 1 Karte vorne lassen
@@ -189,20 +267,39 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
           setDone((n) => n + 1);
           setQueue((q) => (q ?? []).slice(1));
         }
+        // Bis zum nächsten Event-Loop-Turn gesperrt lassen: React rendert zuerst die
+        // neue Queue, erst danach darf die nächste Karte bewertet werden.
+        if (unlockTimerRef.current !== null) window.clearTimeout(unlockTimerRef.current);
+        unlockTimerRef.current = window.setTimeout(() => {
+          unlockTimerRef.current = null;
+          releaseAnswerLock();
+        }, 0);
         return;
       }
 
-      if (!schedule) return;
+      if (!schedule) {
+        releaseAnswerLock();
+        return;
+      }
       setError(null);
       // Re-Entrancy-Schutz: dieselbe Karte nie zweimal bewerten (schneller Doppeltipp,
       // Tasten-Autorepeat, Swipe+Klick) – sonst doppelter Revlog-Eintrag + übersprungene Folgekarte.
-      if (answeredIds.current.has(current.id)) return;
+      if (answeredIds.current.has(current.id)) {
+        releaseAnswerLock();
+        return;
+      }
       answeredIds.current.add(current.id);
-      // Optimistisch: Schlange sofort weiterschalten, DB-Write (vorab berechneter Plan) läuft write-behind.
-      // Schlägt der Write fehl (z. B. Speicher-Quota), Karte wieder freigeben — sie kommt
-      // beim nächsten Nachladen der Schlange zurück, statt still verloren zu gehen.
-      commitReview(current, schedule[grade])
+      setCommitting(true);
+      buzz(grade === Rating.Again ? 18 : 10);
+      // Der Vorschauplan kann schon länger sichtbar sein. Für Persistenz immer den
+      // tatsächlichen Bewertungszeitpunkt verwenden.
+      const answerSchedule = scheduleCard(current, retention, new Date());
+      // Erst nach dem erfolgreichen Transaktions-Commit weiterschalten. So kann ein
+      // Tab-Schließen direkt nach dem Klick keine nur visuell gezählte Bewertung verlieren.
+      commitReview(current, answerSchedule[grade])
         .then(() => {
+          setDone((n) => n + 1);
+          setQueue((q) => (q ?? []).slice(1));
           // Erst NACH dem committeten Write freigeben: eine mit "Nochmal" bewertete Karte
           // wird (Learning-Step) in ein paar Minuten wieder fällig und muss dann über den
           // periodischen Re-Check (oben) in dieser Session erneut auftauchen können — bliebe
@@ -212,14 +309,16 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         .catch((err) => {
           console.error('Bewertung konnte nicht gespeichert werden:', err);
           answeredIds.current.delete(current.id);
-          setDone((n) => Math.max(0, n - 1));
+          setDrag(0);
+          setLeaving(null);
           setError((err as Error).message || 'Bewertung konnte nicht gespeichert werden.');
-          void reload();
+        })
+        .finally(() => {
+          setCommitting(false);
+          releaseAnswerLock();
         });
-      setDone((n) => n + 1);
-      setQueue((q) => (q ?? []).slice(1));
     },
-    [current, schedule, cram, reload],
+    [current, schedule, cram, retention, releaseAnswerLock],
   );
 
   // Wenn die Schlange leer wird: einmal neu fällige Lernkarten nachladen.
@@ -244,10 +343,40 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     setRevealed(true);
   }, [revealed, rendered]);
 
+  const onCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (revealed) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('input, button, select, textarea, a, summary')) {
+      return;
+    }
+    reveal();
+  };
+
+  const onCardInput = (event: React.FormEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.classList.contains('type-answer')) {
+      setTypedAnswer(target.value);
+    }
+  };
+
+  const onCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (
+      !revealed &&
+      event.key === 'Enter' &&
+      event.target instanceof HTMLInputElement &&
+      event.target.classList.contains('type-answer')
+    ) {
+      event.preventDefault();
+      reveal();
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!current || !rendered) return;
+      if (answeringRef.current) return;
       if (e.repeat) return; // gedrückt gehaltene Taste nicht als Mehrfachbewertung werten
+      if (!shouldHandleReviewShortcut(e.key, e.target)) return;
       if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
         e.preventDefault();
         reveal();
@@ -273,7 +402,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   const dragXRef = useRef(0); // Live-Delta (zuverlässiger als der ggf. veraltete drag-State)
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!revealed || leaving) return;
+    if (!revealed || leaving || answeringRef.current) return;
     dragStart.current = { x: e.clientX, y: e.clientY };
     dragging.current = false;
     dragXRef.current = 0;
@@ -296,11 +425,22 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
     const dx = dragXRef.current;
     dragStart.current = null;
     if (dragging.current && Math.abs(dx) >= SWIPE_THRESHOLD) {
+      if (answeringRef.current) {
+        setDrag(0);
+        dragging.current = false;
+        return;
+      }
+      answeringRef.current = true;
+      setTransitioning(true);
       const dir = dx > 0 ? 'right' : 'left';
       setLeaving(dir);
       // Karte rausfliegen lassen, dann bewerten.
       setDrag(dx > 0 ? window.innerWidth : -window.innerWidth);
-      window.setTimeout(() => onAnswer(dir === 'right' ? Rating.Good : Rating.Again), 180);
+      if (swipeTimerRef.current !== null) window.clearTimeout(swipeTimerRef.current);
+      swipeTimerRef.current = window.setTimeout(() => {
+        swipeTimerRef.current = null;
+        onAnswer(dir === 'right' ? Rating.Good : Rating.Again, true);
+      }, 180);
     } else {
       setDrag(0);
     }
@@ -348,6 +488,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   const pct = total > 0 ? done / total : 0;
   const swipeHint = drag > 24 ? 'good' : drag < -24 ? 'again' : null;
   const faceHtml = rendered ? (revealed ? rendered.back : rendered.front) : null;
+  const scopedCardCss = scopeImportedCardCss(rendered?.css ?? '');
   const cardStyle: React.CSSProperties = drag !== 0 || leaving
     ? {
         transform: `translateX(${drag}px) rotate(${drag * 0.04}deg)`,
@@ -370,16 +511,18 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         <div
           className="review-card"
           style={cardStyle}
-          onClick={!revealed ? reveal : undefined}
+          onClick={!revealed ? onCardClick : undefined}
+          onInput={onCardInput}
+          onKeyDown={onCardKeyDown}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
-          <style>{rendered?.css ?? ''}</style>
+          <style>{scopedCardCss}</style>
           <div
             key={faceHtml ? (revealed ? 'back' : 'front') : 'loading'}
-            className="face card"
+            className={`face card card${(current?.templateOrd ?? 0) + 1}`}
             dangerouslySetInnerHTML={faceHtml ? { __html: faceHtml } : undefined}
           >
             {!faceHtml ? <span className="muted">Lädt…</span> : null}
@@ -397,22 +540,50 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         </div>
       ) : cram ? (
         <div className="grade-bar cram">
-          <button className="again" onClick={() => onAnswer(Rating.Again)}>
+          <button
+            className="again"
+            disabled={transitioning}
+            onClick={() => onAnswer(Rating.Again)}
+          >
             <span className="glabel">Nochmal</span>
           </button>
-          <button className="good" onClick={() => onAnswer(Rating.Good)}>
+          <button
+            className="good"
+            disabled={transitioning}
+            onClick={() => onAnswer(Rating.Good)}
+          >
             <span className="glabel">Gewusst</span>
           </button>
         </div>
       ) : (
-        <div className="grade-bar">
-          {GRADES.map(({ grade, label, cls }) => (
-            <button key={grade} className={cls} onClick={() => onAnswer(grade)}>
-              <span className="glabel">{label}</span>
-              <span className="givl">{schedule ? fmtInterval(schedule[grade].card.due) : ''}</span>
-            </button>
-          ))}
-        </div>
+        <>
+          {rendered?.typeAnswer !== undefined && (
+            <div
+              className={`type-answer-result ${
+                typedAnswerMatches(typedAnswer, rendered.typeAnswer) ? 'correct' : 'incorrect'
+              }`}
+              aria-live="polite"
+            >
+              <span>Deine Antwort: {typedAnswer || '—'}</span>
+              <strong>
+                {typedAnswerMatches(typedAnswer, rendered.typeAnswer) ? 'Richtig' : 'Abweichend'}
+              </strong>
+            </div>
+          )}
+          <div className="grade-bar" aria-busy={committing}>
+            {GRADES.map(({ grade, label, cls }) => (
+              <button
+                key={grade}
+                className={cls}
+                disabled={committing || transitioning}
+                onClick={() => onAnswer(grade)}
+              >
+                <span className="glabel">{committing ? 'Speichert…' : label}</span>
+                <span className="givl">{schedule ? fmtInterval(schedule[grade].card.due) : ''}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

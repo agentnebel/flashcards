@@ -1,5 +1,6 @@
 import { error, json } from 'itty-router';
 import type { IRequest } from 'itty-router';
+import { readJsonBody } from './body';
 import type { Env } from './index';
 
 const enc = new TextEncoder();
@@ -94,10 +95,13 @@ function secretOk(env: Env): boolean {
   return typeof env.JWT_SECRET === 'string' && env.JWT_SECRET.length >= 16;
 }
 const MAX_PW = 1024;
+const MAX_AUTH_BODY_BYTES = 8 * 1024;
+const MAX_REGISTERED_USERS = 100;
 
 interface Creds {
   email?: string;
   password?: string;
+  inviteCode?: string;
 }
 
 // Bruteforce-/Massenregistrierungs-Schutz: 10 Auth-Versuche pro IP und Minute
@@ -109,29 +113,117 @@ async function rateLimited(req: IRequest, env: Env): Promise<Response | null> {
   return success ? null : error(429, 'Zu viele Versuche – bitte kurz warten.');
 }
 
+async function registrationIpKey(req: IRequest, env: Env, fallback: string): Promise<string> {
+  // Keine Roh-IP persistieren. Cloudflare setzt CF-Connecting-IP unverfälschbar am Edge;
+  // lokale Entwicklung ohne Header bleibt über das globale Tagesbudget begrenzt.
+  const ip = req.headers.get('CF-Connecting-IP') ?? `unknown:${fallback}`;
+  const key = await hmacKey(env.JWT_SECRET);
+  return b64urlEncode(await crypto.subtle.sign('HMAC', key, enc.encode(`register:${ip}`)));
+}
+
 export async function handleRegister(req: IRequest, env: Env): Promise<Response> {
   if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
   const limited = await rateLimited(req, env);
   if (limited) return limited;
-  const creds = (await req.json().catch(() => ({}))) as Creds;
+  const parsed = await readJsonBody<Creds>(req, MAX_AUTH_BODY_BYTES);
+  if (!parsed.ok) {
+    return error(parsed.reason === 'too-large' ? 413 : 400, 'Ungültige Auth-Anfrage');
+  }
+  const creds = parsed.value;
   const email = normalizeEmail(creds.email);
   const password = creds.password ?? '';
+  const inviteCode = typeof creds.inviteCode === 'string' ? creds.inviteCode.trim() : '';
   if (!email || !email.includes('@') || email.length > 320) return error(400, 'Gültige E-Mail erforderlich');
   if (password.length < 8 || password.length > MAX_PW) return error(400, 'Passwort muss 8–1024 Zeichen lang sein');
+  if (inviteCode.length < 16 || inviteCode.length > 256) {
+    return error(403, 'Gültiger Einladungscode erforderlich');
+  }
   // Case-insensitiver Duplikat-Check, damit User@x.com und user@x.com nicht zwei Konten werden.
   const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(email).first();
   if (existing) return error(409, 'E-Mail bereits registriert');
   const id = crypto.randomUUID();
+  const inviteHash = b64urlEncode(
+    await crypto.subtle.digest('SHA-256', enc.encode(inviteCode)),
+  );
+  const now = Date.now();
+  // Fail-closed vor der teuren Passwortableitung. Der spätere bedingte INSERT prüft
+  // denselben Token innerhalb der D1-Transaktion erneut und konsumiert ihn atomar.
+  const invite = await env.DB.prepare(
+    `SELECT token_hash FROM registration_invites
+      WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?`,
+  )
+    .bind(inviteHash, now)
+    .first<{ token_hash: string }>();
+  if (!invite) return error(403, 'Einladungscode ist ungültig oder bereits verwendet');
+  const day = new Date().toISOString().slice(0, 10);
+  const ipKey = await registrationIpKey(req, env, id);
+  const quota = await env.DB.prepare(
+    `SELECT
+       COALESCE((SELECT users FROM registration_total_usage WHERE id = 1), 0) AS users,
+       COALESCE((SELECT CASE WHEN day = ? THEN registrations ELSE 0 END
+                   FROM registration_daily_usage WHERE id = 1), 0) AS global_today,
+       COALESCE((SELECT CASE WHEN day = ? THEN registrations ELSE 0 END
+                   FROM registration_ip_daily_usage WHERE ip_key = ?), 0) AS ip_today`,
+  )
+    .bind(day, day, ipKey)
+    .first<{ users: number; global_today: number; ip_today: number }>();
+  if ((quota?.users ?? 0) >= MAX_REGISTERED_USERS) {
+    return error(503, 'Registrierung ist vorübergehend geschlossen.');
+  }
+  if ((quota?.global_today ?? 0) >= 5 || (quota?.ip_today ?? 0) >= 1) {
+    return error(429, 'Tägliches Registrierungslimit erreicht. Bitte später erneut versuchen.');
+  }
   const hash = await hashPassword(password);
   try {
-    await env.DB.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?,?,?,?)')
-      .bind(id, email, hash, Date.now())
-      .run();
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users (id, email, password_hash, created_at)
+         SELECT ?,?,?,?
+          WHERE COALESCE((SELECT users FROM registration_total_usage WHERE id = 1), 0) < ?
+            AND EXISTS (
+              SELECT 1 FROM registration_invites
+               WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?
+            )
+         RETURNING id`,
+      ).bind(id, email, hash, now, MAX_REGISTERED_USERS, inviteHash, now),
+      env.DB.prepare(
+        `UPDATE registration_invites
+            SET used_at = ?, used_by = ?
+          WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?
+            AND changes() > 0
+          RETURNING token_hash`,
+      ).bind(now, id, inviteHash, now),
+      env.DB.prepare(
+        `INSERT INTO registration_daily_usage (id, day, registrations)
+         SELECT 1,?,1 WHERE changes() > 0
+         ON CONFLICT(id) DO UPDATE SET
+           day = excluded.day,
+           registrations = CASE WHEN registration_daily_usage.day = excluded.day
+             THEN registration_daily_usage.registrations + 1 ELSE 1 END`,
+      ).bind(day),
+      env.DB.prepare(
+        `INSERT INTO registration_ip_daily_usage (ip_key, day, registrations)
+         SELECT ?,?,1 WHERE changes() > 0
+         ON CONFLICT(ip_key) DO UPDATE SET
+           day = excluded.day,
+           registrations = CASE WHEN registration_ip_daily_usage.day = excluded.day
+             THEN registration_ip_daily_usage.registrations + 1 ELSE 1 END`,
+      ).bind(ipKey, day),
+    ]);
+    const inserted = (results[0]?.results?.[0] as { id?: string } | undefined)?.id;
+    if (!inserted) return error(503, 'Registrierung ist vorübergehend geschlossen.');
+    const consumed = (results[1]?.results?.[0] as { token_hash?: string } | undefined)?.token_hash;
+    if (consumed !== inviteHash) {
+      throw new Error('Einladungscode konnte nicht atomar konsumiert werden');
+    }
   } catch (e) {
     // Race zwischen dem obigen SELECT und diesem INSERT (zwei gleichzeitige Registrierungen
     // derselben E-Mail): die UNIQUE-Constraint schlägt zu statt des vorherigen Checks.
     // Ohne dieses catch würde D1 hier einen 500er werfen statt der erwarteten 409.
     if (/unique/i.test((e as Error).message ?? '')) return error(409, 'E-Mail bereits registriert');
+    if (/registration_(global|ip)_daily_limit/i.test((e as Error).message ?? '')) {
+      return error(429, 'Tägliches Registrierungslimit erreicht. Bitte später erneut versuchen.');
+    }
     throw e;
   }
   const token = await signJwt({ sub: id }, env.JWT_SECRET);
@@ -142,7 +234,11 @@ export async function handleLogin(req: IRequest, env: Env): Promise<Response> {
   if (!secretOk(env)) return error(500, 'Server fehlkonfiguriert');
   const limited = await rateLimited(req, env);
   if (limited) return limited;
-  const creds = (await req.json().catch(() => ({}))) as Creds;
+  const parsed = await readJsonBody<Creds>(req, MAX_AUTH_BODY_BYTES);
+  if (!parsed.ok) {
+    return error(parsed.reason === 'too-large' ? 413 : 400, 'Ungültige Auth-Anfrage');
+  }
+  const creds = parsed.value;
   const email = normalizeEmail(creds.email);
   const password = creds.password ?? '';
   if (!email || !password || password.length > MAX_PW) return error(400, 'email und password erforderlich');

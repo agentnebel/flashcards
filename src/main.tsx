@@ -1,6 +1,6 @@
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import Landing from './screens/Landing';
 import './index.css';
 
@@ -12,36 +12,38 @@ const App = lazy(() => import('./App'));
 const Impressum = lazy(() => import('./screens/Legal').then((m) => ({ default: m.Impressum })));
 const Datenschutz = lazy(() => import('./screens/Legal').then((m) => ({ default: m.Datenschutz })));
 
+// Data Router statt BrowserRouter: Nur damit kann AddCard interne Navigationen und
+// Browser-Zurück zuverlässig blockieren, solange Formulardaten ungespeichert sind.
+const router = createBrowserRouter([
+  { path: '/', element: <Landing /> },
+  {
+    path: '/impressum',
+    element: (
+      <Suspense fallback={null}>
+        <Impressum />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/datenschutz',
+    element: (
+      <Suspense fallback={null}>
+        <Datenschutz />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/app/*',
+    element: (
+      <Suspense fallback={null}>
+        <App />
+      </Suspense>
+    ),
+  },
+]);
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route
-          path="/impressum"
-          element={
-            <Suspense fallback={null}>
-              <Impressum />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/datenschutz"
-          element={
-            <Suspense fallback={null}>
-              <Datenschutz />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/app/*"
-          element={
-            <Suspense fallback={null}>
-              <App />
-            </Suspense>
-          }
-        />
-      </Routes>
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </StrictMode>,
 );

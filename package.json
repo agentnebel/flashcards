@@ -3,15 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck:worker": "tsc -p tsconfig.worker.json",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
+    "deploy:maintenance": "npm run build && wrangler deploy --var MIGRATION_WRITE_PAUSE:1",
     "db:schema:local": "wrangler d1 execute flashcards-db --local --file=./worker/schema.sql",
-    "db:schema:remote": "wrangler d1 execute flashcards-db --remote --file=./worker/schema.sql"
+    "db:schema:remote": "wrangler d1 execute flashcards-db --remote --file=./worker/schema.sql",
+    "db:preflight:sync-quotas:local": "node ./scripts/d1-preflight.mjs --local",
+    "db:preflight:sync-quotas:remote": "node ./scripts/d1-preflight.mjs --remote",
+    "db:migrate:sync-quotas:local": "wrangler d1 execute flashcards-db --local --file=./worker/migrations/0003_sync_quotas_media_gc.sql",
+    "db:migrate:sync-quotas:remote": "wrangler d1 execute flashcards-db --remote --file=./worker/migrations/0003_sync_quotas_media_gc.sql",
+    "db:migrate:registration-invites:local": "wrangler d1 execute flashcards-db --local --file=./worker/migrations/0006_registration_invites.sql",
+    "db:migrate:registration-invites:remote": "wrangler d1 execute flashcards-db --remote --file=./worker/migrations/0006_registration_invites.sql",
+    "db:invite:local": "node ./scripts/d1-create-invite.mjs --local",
+    "db:invite:remote": "node ./scripts/d1-create-invite.mjs --remote",
+    "db:finalize:sync-migration:local": "node ./scripts/d1-finalize.mjs --local",
+    "db:finalize:sync-migration:remote": "node ./scripts/d1-finalize.mjs --remote",
+    "db:cleanup:legacy-log:local": "node ./scripts/d1-cleanup-legacy-log.mjs --local",
+    "db:cleanup:legacy-log:remote": "node ./scripts/d1-cleanup-legacy-log.mjs --remote"
   },
   "dependencies": {
     "dexie": "^4.0.11",

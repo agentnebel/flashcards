@@ -8,11 +8,6 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    # Secret auf Job-Ebene in eine env-Variable spiegeln, damit der Deploy-Schritt
-    # per `if` prüfen kann, ob ein Token hinterlegt ist.
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,15 +23,35 @@ jobs:
       - run: npm test
       - run: npm run build
 
-      # Auto-Deploy NUR, wenn ein Cloudflare-API-Token als Repo-Secret existiert.
-      # Ohne Token wird der Schritt übersprungen statt fehlzuschlagen. D1-Migrationen
-      # laufen bewusst nicht bei jedem Push; sie werden bei Schemaänderungen separat
-      # mit `wrangler d1 execute ...` angewendet.
+      # Nur dieser kleine Check sieht die Secrets. Dadurch stehen Cloudflare-Zugangsdaten
+      # insbesondere `npm ci` und den ausgeführten Dependency-Skripten nicht jobweit offen.
+      # Schema-Version 4 muss nach den separat ausgeführten D1-Migrationen als Repo-Variable
+      # bestätigt werden; andernfalls würde neuer Worker-Code vor seinem Schema deployt.
+      - name: Check deployment preconditions
+        id: deploy-config
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FLASHCARDS_SCHEMA_VERSION: ${{ vars.FLASHCARDS_SCHEMA_VERSION }}
+        run: |
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && "$FLASHCARDS_SCHEMA_VERSION" == "4" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Deploy übersprungen: Cloudflare-Secrets und FLASHCARDS_SCHEMA_VERSION=4 sind erforderlich."
+          fi
+
+      # Auto-Deploy NUR, wenn beide Cloudflare-Secrets existieren UND Schema-Version 4
+      # nach der manuellen Migration bestätigt wurde. D1-Migrationen laufen bewusst nicht
+      # bei jedem Push; ein wiederholtes ALTER TABLE wäre nicht idempotent.
       # Secrets setzen: Repo → Settings → Secrets and variables → Actions
       #   CLOUDFLARE_API_TOKEN  (Workers/R2-Schreibrechte für Deploy)
       #   CLOUDFLARE_ACCOUNT_ID (160ce2ed549950c2f2bf191ab93b3e45)
+      # Variable nach erfolgreicher Migration setzen:
+      #   FLASHCARDS_SCHEMA_VERSION = 4
       - name: Deploy Worker + Assets
-        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        if: ${{ steps.deploy-config.outputs.enabled == 'true' }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

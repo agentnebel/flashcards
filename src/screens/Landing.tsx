@@ -338,7 +338,8 @@ export default function Landing() {
         <h2 className="landing-h2">Der Code gehört dir. MIT-lizenziert.</h2>
         <p className="landing-oss-lead">
           Der komplette Code liegt offen auf GitHub. Schau rein, fork ihn oder hoste die App selbst.
-          Im Free-Tier von Cloudflare kostet dich das praktisch nichts.
+          Harte Nutzungsgrenzen schützen vor unkontrolliertem Verbrauch. Prüfe vor dem
+          Produktivbetrieb trotzdem Cloudflare-Plan, Billing-Limits und Worker-CPU.
         </p>
         <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="landing-btn landing-btn-invert">
           <GithubMark />

@@ -891,6 +891,18 @@ input[type="checkbox"]{ width: auto; }
 .feedback.ok{ color: var(--good); }
 .feedback.err{ color: var(--again); }
 .feedback.warn{ color: var(--hard); }
+
+.type-answer-result{
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  background: var(--fill);
+  font-size: var(--t-subhead);
+}
+.type-answer-result.correct strong{ color: var(--good); }
+.type-answer-result.incorrect strong{ color: var(--again); }
 code{
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;

@@ -1,9 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useBeforeUnload, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { db } from '../db/db';
 import { addNote, gcOrphanedMedia, updateNote } from '../db/api';
+import { withLocalDataOperation } from '../db/localDataLock';
 import { mediaUrl, resolveMediaHtml, storeImage } from '../lib/media';
 import { renderMarkdown } from '../lib/markdown';
 import { sanitizeHtml } from '../lib/sanitize';
@@ -42,12 +43,18 @@ export default function AddCard() {
   const [noteTypeId, setNoteTypeId] = useState('');
   const [fields, setFields] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
-  const [busyField, setBusyField] = useState<string | null>(null);
+  const [pendingByField, setPendingByField] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const caretRefs = useRef<Record<string, number>>({});
   const loadedNoteIdRef = useRef<string | null>(null);
+  const pendingImagesRef = useRef(0);
+  const savingRef = useRef(false);
+  const allowNavigationRef = useRef(false);
+  const timersRef = useRef<number[]>([]);
   // Welchem Notiztyp der aktuelle `fields`-State entspricht. Verhindert, dass beim
   // Notiztyp-Wechsel im Edit-Modus die (dann falschen, aber unsichtbaren) alten Feldwerte
   // stehen bleiben und mitgespeichert werden — siehe Reset-Effekt unten.
@@ -77,13 +84,38 @@ export default function AddCard() {
   }, [noteTypes, noteTypeId, isEdit]);
 
   const nt = useMemo(() => noteTypes?.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
+  const pendingImages = Object.values(pendingByField).reduce((sum, count) => sum + count, 0);
+  const shouldWarn = dirty || pendingImages > 0 || saving;
+  const blocker = useBlocker(() => shouldWarn && !allowNavigationRef.current);
 
   useEffect(() => {
-    if (saved || !Object.values(fields).some((value) => value.trim())) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [fields, saved]);
+    if (blocker.state !== 'blocked') return;
+    // Ein bereits laufender Commit ist nicht mehr verwerfbar. Navigation kurz zurückweisen;
+    // nach erfolgreichem Edit-Commit navigiert onSave selbst, bei einem Fehler bleibt das
+    // Formular mit sichtbarer Meldung erhalten.
+    if (savingRef.current) {
+      blocker.reset();
+      return;
+    }
+    if (window.confirm('Ungespeicherte Änderungen verwerfen und Seite verlassen?')) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+
+  useBeforeUnload(
+    (event) => {
+      if (!shouldWarn) return;
+      event.preventDefault();
+      event.returnValue = '';
+    },
+    { capture: true },
+  );
+
+  useEffect(
+    () => () => {
+      for (const timer of timersRef.current) window.clearTimeout(timer);
+    },
+    [],
+  );
 
   // Felder zurücksetzen, sobald der AUSGEWÄHLTE Notiztyp nicht mehr zu dem passt, für den
   // `fields` zuletzt gesetzt wurde. Deckt zwei Fälle ab: (1) neue Karte, Notiztyp-Dropdown
@@ -103,6 +135,7 @@ export default function AddCard() {
 
   // Fügt ein <img>-Tag an der gemerkten Caret-Position ein (oder hängt es an).
   function insertTagAtCaret(field: string, tag: string) {
+    setDirty(true);
     setFields((prev) => {
       const current = prev[field] ?? '';
       const caret = caretRefs.current[field];
@@ -119,15 +152,28 @@ export default function AddCard() {
       alert('Bild ist zu groß (max. 25 MB).');
       return;
     }
-    setBusyField(field);
+    pendingImagesRef.current += 1;
+    setPendingByField((prev) => ({ ...prev, [field]: (prev[field] ?? 0) + 1 }));
     try {
-      const hash = await storeImage(file);
+      // Bilddekodierung/Kompression kann länger dauern. Der gemeinsame Import-Lock sorgt
+      // dafür, dass ein Logout erst danach wischt und der Blob nicht hinter dem Wipe
+      // wieder als fremdes, unreferenziertes Medium in IndexedDB auftaucht.
+      const hash = await withLocalDataOperation(() => storeImage(file));
       insertTagAtCaret(field, `<img src="flashmedia:${hash}">`);
     } catch (err) {
       console.error('Bild konnte nicht gespeichert werden', err);
       alert('Bild konnte nicht verarbeitet werden.');
     } finally {
-      setBusyField(null);
+      pendingImagesRef.current = Math.max(0, pendingImagesRef.current - 1);
+      setPendingByField((prev) => {
+        const next = Math.max(0, (prev[field] ?? 1) - 1);
+        if (next === 0) {
+          const rest = { ...prev };
+          delete rest[field];
+          return rest;
+        }
+        return { ...prev, [field]: next };
+      });
     }
   }
 
@@ -174,34 +220,45 @@ export default function AddCard() {
   }
 
   function removeImage(field: string, hash: string) {
+    setDirty(true);
     setFields((prev) => ({ ...prev, [field]: removeMediaTag(prev[field] ?? '', hash) }));
   }
 
   function changeNoteType(nextId: string) {
     if (nextId === noteTypeId) return;
     if (Object.values(fields).some((value) => value.trim()) && !window.confirm('Der Wechsel des Notiztyps verwirft nicht gespeicherte Feldinhalte. Fortfahren?')) return;
+    setDirty(true);
     setNoteTypeId(nextId);
   }
 
   async function onSave() {
-    if (!nt || !deckId || busyField) return;
+    if (!nt || !deckId || pendingImagesRef.current > 0 || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
     try {
       if (isEdit && noteId) {
         await updateNote(noteId, fields, deckId, noteTypeId);
         await gcOrphanedMedia();
-        setSaved(true);
-        setTimeout(() => { setSaved(false); navigate('/app/browse'); }, 1000);
+        setDirty(false);
+        // Direkt nach dem erfolgreichen Commit zurück. Ein verzögerter Timer ließ die
+        // Controls wieder editierbar werden und verwarf Eingaben aus diesem Zeitfenster.
+        allowNavigationRef.current = true;
+        navigate('/app/browse');
       } else {
         await addNote({ noteTypeId: nt.id, deckId, fields });
         setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
         caretRefs.current = {};
+        setDirty(false);
         setSaved(true);
-        setTimeout(() => setSaved(false), 1500);
+        timersRef.current.push(window.setTimeout(() => setSaved(false), 1500));
       }
     } catch (err) {
       // z. B. würde die Notiz keine Karte erzeugen (Pflichtfeld einer Vorlage leer) —
       // ohne dieses catch bliebe der Fehler unsichtbar (fire-and-forget-Klick-Handler).
       alert((err as Error).message || 'Speichern fehlgeschlagen.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   }
 
@@ -209,12 +266,20 @@ export default function AddCard() {
     <div>
       <h1 className="screen-title">{isEdit ? 'Karte bearbeiten' : 'Neue Karte'}</h1>
       {isEdit && (
-        <button className="back-btn" onClick={() => navigate('/app/browse')}>← Zurück</button>
+        <button className="back-btn" disabled={saving} onClick={() => navigate('/app/browse')}>← Zurück</button>
       )}
 
       <div className="field">
         <label className="field-label" htmlFor="ac-deck">Deck</label>
-        <select id="ac-deck" value={deckId} onChange={(e) => setDeckId(e.target.value)}>
+        <select
+          id="ac-deck"
+          value={deckId}
+          disabled={saving}
+          onChange={(e) => {
+            setDeckId(e.target.value);
+            setDirty(true);
+          }}
+        >
           {decks.map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
@@ -223,7 +288,12 @@ export default function AddCard() {
 
       <div className="field">
         <label className="field-label" htmlFor="ac-nt">Notiztyp</label>
-        <select id="ac-nt" value={noteTypeId} onChange={(e) => changeNoteType(e.target.value)}>
+        <select
+          id="ac-nt"
+          value={noteTypeId}
+          disabled={saving}
+          onChange={(e) => changeNoteType(e.target.value)}
+        >
           {noteTypes.map((t) => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
@@ -251,11 +321,11 @@ export default function AddCard() {
               <button
                 type="button"
                 className="tint-text"
-                disabled={busyField === f}
+                disabled={saving || (pendingByField[f] ?? 0) > 0}
                 onClick={() => fileInputRefs.current[f]?.click()}
                 title="Bild aus Datei einfügen"
               >
-                {busyField === f ? '…' : '+ Bild'}
+                {(pendingByField[f] ?? 0) > 0 ? '…' : '+ Bild'}
               </button>
             </div>
             <textarea
@@ -263,7 +333,11 @@ export default function AddCard() {
               ref={(el) => { textareaRefs.current[f] = el; }}
               rows={f === nt.fields[0] && nt.kind === 'cloze' ? 4 : 2}
               value={fields[f] ?? ''}
-              onChange={(e) => setFields((prev) => ({ ...prev, [f]: e.target.value }))}
+              disabled={saving}
+              onChange={(e) => {
+                setFields((prev) => ({ ...prev, [f]: e.target.value }));
+                setDirty(true);
+              }}
               onSelect={() => rememberCaret(f)}
               onKeyUp={() => rememberCaret(f)}
               onClick={() => rememberCaret(f)}
@@ -276,13 +350,19 @@ export default function AddCard() {
               ref={(el) => { fileInputRefs.current[f] = el; }}
               type="file"
               accept="image/*"
+              disabled={saving}
               style={{ display: 'none' }}
               onChange={(e) => onFileChange(f, e)}
             />
             {hashes.length > 0 && (
               <div className="thumb-strip">
                 {hashes.map((h, i) => (
-                  <Thumb key={`${h}-${i}`} hash={h} onRemove={() => removeImage(f, h)} />
+                  <Thumb
+                    key={`${h}-${i}`}
+                    hash={h}
+                    disabled={saving}
+                    onRemove={() => removeImage(f, h)}
+                  />
                 ))}
               </div>
             )}
@@ -291,8 +371,21 @@ export default function AddCard() {
         );
       })}
 
-      <button className="primary block" style={{ marginTop: 'var(--s2)' }} disabled={!canSave || busyField !== null} onClick={() => void onSave()}>
-        {busyField ? 'Bild wird verarbeitet…' : saved ? '✓ Gespeichert' : isEdit ? 'Änderungen speichern' : 'Karte speichern'}
+      <button
+        className="primary block"
+        style={{ marginTop: 'var(--s2)' }}
+        disabled={!canSave || pendingImages > 0 || saving}
+        onClick={() => void onSave()}
+      >
+        {pendingImages > 0
+          ? `${pendingImages} Bild${pendingImages === 1 ? '' : 'er'} wird verarbeitet…`
+          : saving
+            ? 'Speichert…'
+            : saved
+              ? '✓ Gespeichert'
+              : isEdit
+                ? 'Änderungen speichern'
+                : 'Karte speichern'}
       </button>
     </div>
   );
@@ -323,7 +416,7 @@ function MarkdownPreview({ source }: { source: string }) {
 }
 
 // Kleine Thumbnail-Vorschau, die die Object-URL des Hashes lädt.
-function Thumb({ hash, onRemove }: { hash: string; onRemove: () => void }) {
+function Thumb({ hash, disabled, onRemove }: { hash: string; disabled: boolean; onRemove: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -337,7 +430,7 @@ function Thumb({ hash, onRemove }: { hash: string; onRemove: () => void }) {
   return (
     <div className="thumb">
       {url ? <img src={url} alt="" /> : <div className="thumb-ph" />}
-      <button type="button" className="thumb-x" onClick={onRemove} title="Bild entfernen">×</button>
+      <button type="button" className="thumb-x" disabled={disabled} onClick={onRemove} title="Bild entfernen">×</button>
     </div>
   );
 }

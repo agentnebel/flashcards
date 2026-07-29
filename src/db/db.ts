@@ -75,6 +75,10 @@ export interface OutboxItem {
   entityId: string;
   payload: unknown;
   createdAt: number;
+  // Nicht sendbare Alt-/Importdaten bleiben sichtbar in der Outbox, blockieren aber
+  // spätere gültige Änderungen nicht mehr. Eine neuere gültige Änderung derselben
+  // Entität räumt diesen Eintrag nach erfolgreichem Push mit auf.
+  syncError?: string;
 }
 
 export interface Meta {

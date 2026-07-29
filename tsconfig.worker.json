@@ -4,10 +4,16 @@
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "composite": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["worker"]
+  "include": [
+    "worker",
+    "src/lib/mediaGcPolicy.ts",
+    "src/lib/syncProtocol.ts"
+  ],
+  "exclude": ["worker/**/*.test.ts"]
 }

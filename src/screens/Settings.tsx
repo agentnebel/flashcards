@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
-import { exportBackup, getDesiredRetention, importBackup, setDesiredRetention } from '../db/api';
+import {
+  exportBackupArchive,
+  getDesiredRetention,
+  importBackupFile,
+  setDesiredRetention,
+} from '../db/api';
 import { db } from '../db/db';
 import {
   getSyncState,
@@ -26,9 +31,11 @@ function fmtTime(ts: number | null): string {
 export default function Settings() {
   const [retention, setRetention] = useState(0.9);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const auth = useLiveQuery(() => db.meta.get('auth'), [])?.value as Auth | undefined;
   const outboxCount = useLiveQuery(() => db.outbox.count(), []) ?? 0;
+  const pendingMediaCount = useLiveQuery(() => db.media.where('synced').equals(0).count(), []) ?? 0;
 
   useEffect(() => {
     getDesiredRetention().then(setRetention);
@@ -41,14 +48,21 @@ export default function Settings() {
   }
 
   async function onExport() {
-    const json = await exportBackup();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `flashcards-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    setBackupBusy(true);
+    setImportMsg(null);
+    try {
+      const blob = await exportBackupArchive();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `flashcards-backup-${new Date().toISOString().slice(0, 10)}.flashcards.zip`;
+      a.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      setImportMsg(`Export fehlgeschlagen: ${(err as Error).message}`);
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -56,13 +70,15 @@ export default function Settings() {
     e.target.value = ''; // gleiche Datei erneut wählbar machen
     if (!file) return;
     if (!window.confirm('Backup einspielen? Vorhandene Karten mit gleicher ID werden überschrieben.')) return;
+    setBackupBusy(true);
     setImportMsg(null);
     try {
-      const text = await file.text();
-      const r = await importBackup(text);
+      const r = await importBackupFile(file);
       setImportMsg(`Importiert: ${r.decks} Decks, ${r.notes} Notizen, ${r.cards} Karten, ${r.media} Bilder.`);
     } catch (err) {
       setImportMsg(`Import fehlgeschlagen: ${(err as Error).message}`);
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -93,21 +109,30 @@ export default function Settings() {
 
       <div className="section">
         <h2 className="section-head">Konto &amp; Sync</h2>
-        {auth ? <Account email={auth.email} outbox={outboxCount} /> : <AuthForm />}
+        {auth ? (
+          <Account
+            email={auth.email}
+            outbox={outboxCount}
+            pendingMedia={pendingMediaCount}
+            localDataBusy={backupBusy}
+          />
+        ) : <AuthForm />}
       </div>
 
       <div className="section">
         <h2 className="section-head">Daten</h2>
         <div className="group" style={{ padding: 'var(--s4)' }}>
           <div className="stack">
-            <button className="block" onClick={onExport}>JSON-Backup exportieren</button>
-            <button className="block" onClick={() => importInputRef.current?.click()}>
-              JSON-Backup einspielen
+            <button className="block" disabled={backupBusy} onClick={() => void onExport()}>
+              {backupBusy ? 'Backup wird verarbeitet…' : 'Vollständiges Backup exportieren'}
+            </button>
+            <button className="block" disabled={backupBusy} onClick={() => importInputRef.current?.click()}>
+              Backup einspielen
             </button>
             <input
               ref={importInputRef}
               type="file"
-              accept="application/json,.json"
+              accept="application/json,application/zip,.json,.zip,.flashcards"
               style={{ display: 'none' }}
               onChange={onImportFile}
             />
@@ -125,11 +150,25 @@ export default function Settings() {
   );
 }
 
-function Account({ email, outbox }: { email: string; outbox: number }) {
+function Account({
+  email,
+  outbox,
+  pendingMedia,
+  localDataBusy,
+}: {
+  email: string;
+  outbox: number;
+  pendingMedia: number;
+  localDataBusy: boolean;
+}) {
   const syncState = useSync();
   async function onLogout() {
-    const msg = outbox > 0
-      ? `Abmelden löscht lokale Daten inklusive ${outbox} noch nicht synchronisierte(r) Änderung(en). Trotzdem abmelden?`
+    const pending = [
+      outbox > 0 ? `${outbox} noch nicht synchronisierte Änderung(en)` : '',
+      pendingMedia > 0 ? `${pendingMedia} noch nicht hochgeladene(s) Bild(er)` : '',
+    ].filter(Boolean).join(' und ');
+    const msg = pending
+      ? `Abmelden löscht lokale Daten inklusive ${pending}. Trotzdem abmelden?`
       : 'Abmelden löscht die lokalen App-Daten auf diesem Gerät. Synchronisierte Daten werden beim erneuten Login wieder geladen. Trotzdem abmelden?';
     if (!window.confirm(msg)) return;
     await logout();
@@ -141,10 +180,10 @@ function Account({ email, outbox }: { email: string; outbox: number }) {
           Angemeldet als <strong style={{ color: 'var(--label)' }}>{email}</strong>
         </p>
         <div className="row">
-          <button className="primary" disabled={syncState.syncing} onClick={() => void sync()}>
+          <button className="primary" disabled={syncState.syncing || localDataBusy} onClick={() => void sync()}>
             {syncState.syncing ? 'Synchronisiere…' : 'Jetzt synchronisieren'}
           </button>
-          <button onClick={() => void onLogout()}>Abmelden</button>
+          <button disabled={localDataBusy} onClick={() => void onLogout()}>Abmelden</button>
         </div>
         <p className="info" style={{ margin: 0 }}>
           Letzter Sync: {fmtTime(syncState.lastSyncAt)} · offen: {outbox}
@@ -158,6 +197,7 @@ function Account({ email, outbox }: { email: string; outbox: number }) {
 function AuthForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -165,7 +205,7 @@ function AuthForm() {
     setBusy(true);
     setError(null);
     try {
-      if (action === 'register') await register(email.trim(), password);
+      if (action === 'register') await register(email.trim(), password, inviteCode.trim());
       else await login(email.trim(), password);
       void sync();
     } catch (e) {
@@ -176,6 +216,7 @@ function AuthForm() {
   }
 
   const valid = email.includes('@') && password.length >= 8;
+  const validRegistration = valid && inviteCode.trim().length >= 16;
 
   return (
     <div className="group" style={{ padding: 'var(--s4)' }}>
@@ -202,11 +243,23 @@ function AuthForm() {
           onChange={(e) => setPassword(e.target.value)}
         />
       </div>
+      <div className="field">
+        <label className="field-label" htmlFor="auth-invite">
+          Einladungscode (nur zur Registrierung)
+        </label>
+        <input
+          id="auth-invite"
+          type="text"
+          autoComplete="one-time-code"
+          value={inviteCode}
+          onChange={(e) => setInviteCode(e.target.value)}
+        />
+      </div>
       <div className="row">
         <button className="primary" disabled={!valid || busy} onClick={() => run('login')}>
           {busy ? '…' : 'Anmelden'}
         </button>
-        <button disabled={!valid || busy} onClick={() => run('register')}>
+        <button disabled={!validRegistration || busy} onClick={() => run('register')}>
           Registrieren
         </button>
       </div>

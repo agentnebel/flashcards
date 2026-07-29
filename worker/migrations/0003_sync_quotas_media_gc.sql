@@ -1,20 +1,12 @@
--- D1-Schema für den Sync-Server.
--- Anwenden:  npm run db:schema:local   (lokal)
---            npm run db:schema:remote  (Cloudflare)
-
-CREATE TABLE IF NOT EXISTS users (
-  id            TEXT PRIMARY KEY,
-  email         TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at    INTEGER NOT NULL
-);
-
--- Öffentliche Registrierung bleibt für kleine Selbsthost-Installationen nutzbar, kann
--- aber nicht unbegrenzt Wegwerfkonten erzeugen und damit Shared Quotas verdrängen.
+-- Per-user-Cursor aus dem bisherigen globalen change_log-Cursor übernehmen, bevor
+-- der alte Feed zum kompakten, dauerhaft benötigten Sequenz-Allocator wird.
 CREATE TABLE IF NOT EXISTS registration_total_usage (
   id    INTEGER PRIMARY KEY CHECK (id = 1),
   users INTEGER NOT NULL DEFAULT 0 CHECK (users >= 0)
 );
+INSERT INTO registration_total_usage (id, users)
+SELECT 1, COUNT(*) FROM users WHERE true
+ON CONFLICT(id) DO UPDATE SET users = excluded.users;
 CREATE TABLE IF NOT EXISTS registration_daily_usage (
   id            INTEGER PRIMARY KEY CHECK (id = 1),
   day           TEXT NOT NULL,
@@ -27,22 +19,6 @@ CREATE TABLE IF NOT EXISTS registration_ip_daily_usage (
   registrations INTEGER NOT NULL
     CONSTRAINT registration_ip_daily_limit CHECK (registrations BETWEEN 0 AND 1)
 );
--- Registrierung ist fail-closed: Der Admin erzeugt zufällige Einmalcodes. Gespeichert
--- wird nur SHA-256(base64url); ein D1-Leak legt noch unbenutzte Klartextcodes nicht offen.
-CREATE TABLE IF NOT EXISTS registration_invites (
-  token_hash TEXT PRIMARY KEY CHECK (LENGTH(token_hash) = 43),
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL CHECK (expires_at >= created_at),
-  used_at    INTEGER,
-  used_by    TEXT,
-  CHECK (
-    (used_at IS NULL AND used_by IS NULL) OR
-    (used_at IS NOT NULL AND used_by IS NOT NULL)
-  )
-);
-CREATE INDEX IF NOT EXISTS idx_registration_invites_available
-  ON registration_invites (expires_at)
-  WHERE used_at IS NULL;
 CREATE TRIGGER IF NOT EXISTS trg_user_insert_usage
 AFTER INSERT ON users
 BEGIN
@@ -55,45 +31,26 @@ BEGIN
   UPDATE registration_total_usage SET users = MAX(0, users - 1) WHERE id = 1;
 END;
 
--- Aktueller Stand je Objekt (Last-Write-Wins). payload = JSON, NULL bei Löschung.
-CREATE TABLE IF NOT EXISTS sync_objects (
-  user_id    TEXT NOT NULL,
-  entity     TEXT NOT NULL,          -- deck | note | card | revlog | noteType
-  entity_id  TEXT NOT NULL,
-  payload    TEXT,
-  deleted    INTEGER NOT NULL DEFAULT 0,
-  seq        INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, entity, entity_id)
+CREATE TABLE IF NOT EXISTS sync_counters (
+  user_id TEXT PRIMARY KEY,
+  seq     INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0)
 );
-CREATE INDEX IF NOT EXISTS idx_sync_user_seq ON sync_objects (user_id, seq);
+INSERT INTO sync_counters (user_id, seq)
+SELECT user_id, COALESCE(MAX(seq), 0)
+FROM sync_objects
+WHERE true
+GROUP BY user_id
+ON CONFLICT(user_id) DO UPDATE SET seq = MAX(sync_counters.seq, excluded.seq);
 
--- Gemeinsamer globaler Sequenz-Allocator für alte und neue Worker-Versionen während
--- rollierender Deployments. Der AFTER-Trigger entfernt die Feed-Zeile sofort; nur der
--- monotone AUTOINCREMENT-Stand in sqlite_sequence bleibt erhalten.
-CREATE TABLE IF NOT EXISTS change_log (
-  seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    TEXT NOT NULL,
-  entity     TEXT NOT NULL,
-  entity_id  TEXT NOT NULL,
-  op         TEXT NOT NULL,
-  changed_at INTEGER NOT NULL
-);
+-- Ab diesem Punkt verwenden alter und neuer Worker denselben globalen AUTOINCREMENT-
+-- Allocator. Der Feed selbst wächst nicht weiter; last_insert_rowid() bleibt trotz
+-- sofortiger Löschung für das nachfolgende sync_objects-Upsert gültig.
 CREATE TRIGGER IF NOT EXISTS trg_change_log_compact
 AFTER INSERT ON change_log
 BEGIN
   DELETE FROM change_log WHERE seq = NEW.seq;
 END;
 
--- Monotoner Delta-Cursor je Konto. Ein Push reserviert einen zusammenhängenden Bereich;
--- der globale Allocator verhindert dabei Überschneidungen zwischen Worker-Versionen.
-CREATE TABLE IF NOT EXISTS sync_counters (
-  user_id TEXT PRIMARY KEY,
-  seq     INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0)
-);
-
--- Atomarer Objektzähler: verhindert, dass parallele Pushes den 50k-Deckel durch ein
--- Check-then-act-Race überschreiten. Tombstones zählen mit, weil sie weiter synchronisiert werden.
 CREATE TABLE IF NOT EXISTS sync_object_usage (
   user_id TEXT PRIMARY KEY,
   objects INTEGER NOT NULL DEFAULT 0
@@ -101,14 +58,36 @@ CREATE TABLE IF NOT EXISTS sync_object_usage (
   bytes   INTEGER NOT NULL DEFAULT 0
     CONSTRAINT sync_user_storage_bytes_limit CHECK (bytes BETWEEN 0 AND 67108864)
 );
+INSERT INTO sync_object_usage (user_id, objects, bytes)
+SELECT user_id,
+       COUNT(*),
+       SUM(LENGTH(CAST(COALESCE(payload, '') AS BLOB)) + 256)
+FROM sync_objects
+WHERE true
+GROUP BY user_id
+ON CONFLICT(user_id) DO UPDATE SET objects = excluded.objects, bytes = excluded.bytes;
+
 CREATE TABLE IF NOT EXISTS sync_global_storage_usage (
   id    INTEGER PRIMARY KEY CHECK (id = 1),
   bytes INTEGER NOT NULL DEFAULT 0
     CONSTRAINT sync_global_storage_bytes_limit CHECK (bytes BETWEEN 0 AND 268435456)
 );
+INSERT INTO sync_global_storage_usage (id, bytes)
+SELECT 1, COALESCE(SUM(LENGTH(CAST(COALESCE(payload, '') AS BLOB)) + 256), 0)
+FROM sync_objects
+WHERE true
+ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes;
 
--- Kompatibilitäts- und Konsistenztrigger: Sie halten die neuen Zähler auch dann korrekt,
--- wenn während eines Rollouts noch der alte Worker direkt in sync_objects schreibt.
+-- Ab jetzt spiegeln auch Schreibvorgänge des noch laufenden Alt-Workers die neuen Zähler.
+CREATE TABLE IF NOT EXISTS sync_payload_migration_guard (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  max_bytes INTEGER NOT NULL CHECK (max_bytes <= 262400)
+);
+INSERT OR REPLACE INTO sync_payload_migration_guard (id, max_bytes)
+SELECT 1, COALESCE(MAX(LENGTH(CAST(COALESCE(payload, '') AS BLOB))), 0)
+FROM sync_objects;
+DROP TABLE sync_payload_migration_guard;
+
 CREATE TRIGGER IF NOT EXISTS trg_sync_payload_insert_limit
 BEFORE INSERT ON sync_objects
 WHEN LENGTH(CAST(COALESCE(NEW.payload, '') AS BLOB)) > 262400
@@ -163,8 +142,6 @@ BEGIN
    WHERE id = 1;
 END;
 
--- Harte Tagesbudgets schützen das gemeinsame D1-Kontingent. CHECK-Constraints machen
--- parallele Requests sicher; Worker-Rate-Limits dienen zusätzlich nur als Burst-Schutz.
 CREATE TABLE IF NOT EXISTS sync_user_daily_usage (
   user_id   TEXT PRIMARY KEY,
   day       TEXT NOT NULL,
@@ -190,32 +167,35 @@ CREATE TABLE IF NOT EXISTS sync_global_daily_pull_usage (
     CONSTRAINT sync_global_daily_pull_limit CHECK (units BETWEEN 0 AND 100000)
 );
 
--- Medien-Metadaten (Blobs liegen in R2 unter {user_id}/{sha256}).
-CREATE TABLE IF NOT EXISTS media (
-  id         TEXT PRIMARY KEY,
-  user_id    TEXT NOT NULL,
-  sha256     TEXT NOT NULL,
-  mime       TEXT,
-  size       INTEGER,
-  r2_key     TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  orphaned_at INTEGER,
-  UNIQUE (user_id, sha256)
-);
+ALTER TABLE media ADD COLUMN orphaned_at INTEGER;
 
--- Atomar fortgeschriebener Speicherstand. Obergrenzen prüft der Worker direkt im
--- bedingten Media-INSERT; diese Zähler bleiben während eines Alt-Worker-Rollouts bewusst
--- nach oben offen, damit ein bereits nach R2 geschriebener Blob nicht ohne Metazeile bleibt.
 CREATE TABLE IF NOT EXISTS media_usage (
   user_id TEXT PRIMARY KEY,
   used    INTEGER NOT NULL DEFAULT 0 CHECK (used >= 0),
   items   INTEGER NOT NULL DEFAULT 0 CHECK (items >= 0)
 );
+INSERT INTO media_usage (user_id, used, items)
+SELECT user_id,
+       COALESCE(SUM(size), 0),
+       COUNT(*)
+FROM media
+WHERE true
+GROUP BY user_id
+ON CONFLICT(user_id) DO UPDATE SET used = excluded.used, items = excluded.items;
+
 CREATE TABLE IF NOT EXISTS media_global_usage (
   id    INTEGER PRIMARY KEY CHECK (id = 1),
   used  INTEGER NOT NULL DEFAULT 0 CHECK (used >= 0),
   items INTEGER NOT NULL DEFAULT 0 CHECK (items >= 0)
 );
+INSERT INTO media_global_usage (id, used, items)
+SELECT 1,
+       COALESCE(SUM(size), 0),
+       COUNT(*)
+FROM media
+WHERE true
+ON CONFLICT(id) DO UPDATE SET used = excluded.used, items = excluded.items;
+
 CREATE TABLE IF NOT EXISTS media_user_daily_usage (
   user_id TEXT PRIMARY KEY,
   day     TEXT NOT NULL,
@@ -261,8 +241,6 @@ CREATE TABLE IF NOT EXISTS media_gc_global_daily_usage (
     CONSTRAINT media_gc_global_daily_limit CHECK (units BETWEEN 0 AND 4000)
 );
 
--- Medienquota folgt atomar den Metadatenzeilen. Dadurch bleiben auch Uploads/Löschungen
--- des alten Workers im kurzen Migrationsfenster korrekt verbucht.
 CREATE TRIGGER IF NOT EXISTS trg_media_insert_usage
 AFTER INSERT ON media
 BEGIN
@@ -290,8 +268,6 @@ BEGIN
    WHERE id = 1;
 END;
 
--- Verhindert, dass der teure referenzbasierte Vollscan über den öffentlichen GC-Endpunkt
--- beliebig oft ausgelöst wird.
 CREATE TABLE IF NOT EXISTS media_gc_runs (
   user_id     TEXT PRIMARY KEY,
   last_run_at INTEGER NOT NULL,
@@ -300,15 +276,12 @@ CREATE TABLE IF NOT EXISTS media_gc_runs (
   media_cursor TEXT NOT NULL DEFAULT '',
   snapshot_seq INTEGER NOT NULL DEFAULT 0
 );
-
--- Bounded GC-Snapshot: Notizen werden über mehrere Läufe gescannt, ohne alle Payloads
--- gleichzeitig in den Worker-Speicher zu laden. Der Sweep nutzt diesen indexierten Satz.
 CREATE TABLE IF NOT EXISTS media_gc_references (
   user_id TEXT NOT NULL,
   sha256  TEXT NOT NULL,
   PRIMARY KEY (user_id, sha256)
 );
 
--- HINWEIS (Phase 2): Für Admin-Queries/Stats kann das generische sync_objects
--- später in normalisierte Tabellen (decks, notes, cards, revlog, note_types mit
--- parent_id-Adjazenzliste) überführt werden — siehe IMPLEMENTATION_PLAN.md §4.2.
+-- Historische `change_log`-Zeilen absichtlich NOCH NICHT löschen: Der bis zum
+-- anschließenden Worker-Rollout laufende Alt-Worker kann sie noch benötigen. Nach
+-- verifiziertem Deploy finalisiert 0004 den Backfill und leert nur die alten Zeilen.

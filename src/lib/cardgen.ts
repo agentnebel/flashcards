@@ -7,6 +7,11 @@ export interface CardSpec {
   clozeNum: number | null;
 }
 
+interface FieldReference {
+  name: string;
+  filters: string[];
+}
+
 // Welche Cloze-Nummern kommen im Text vor? ({{c1::...}}, {{c2::...}})
 export function clozeNumbers(text: string): number[] {
   const set = new Set<number>();
@@ -14,6 +19,28 @@ export function clozeNumbers(text: string): number[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) set.add(parseInt(m[1], 10));
   return [...set].sort((a, b) => a - b);
+}
+
+function parseFieldReference(raw: string): FieldReference {
+  const parts = raw.split(':').map((part) => part.trim());
+  return {
+    name: parts.pop() ?? '',
+    filters: parts.map((filter) => filter.toLowerCase()),
+  };
+}
+
+function clozeFieldNames(nt: NoteType): string[] {
+  const names = new Set<string>();
+  const templates = nt.templates.length ? nt.templates : [{ name: '', qfmt: '', afmt: '' }];
+  for (const template of templates) {
+    for (const source of [template.qfmt, template.afmt]) {
+      for (const match of source.matchAll(/\{\{([^{}#^/][^{}]*)\}\}/g)) {
+        const ref = parseFieldReference(match[1]);
+        if (ref.filters.includes('cloze') && ref.name) names.add(ref.name);
+      }
+    }
+  }
+  return [...names];
 }
 
 const MEANINGFUL_FRONT_TAG_RE = /<(?:img|audio|video|svg|canvas|object|embed)\b/i;
@@ -31,8 +58,13 @@ function frontHasContent(qfmt: string, fields: Record<string, string>): boolean 
 // Aus einer Notiz werden 1..n Karten erzeugt (Templates bzw. Cloze-Deletions).
 export function generateCards(note: Note, nt: NoteType): CardSpec[] {
   if (nt.kind === 'cloze') {
-    const text = note.fields[nt.fields[0]] ?? '';
-    const nums = clozeNumbers(text);
+    // Importierte Anki-Cloze-Typen können das Lückenfeld an beliebiger Position haben.
+    // Maßgeblich ist der {{cloze:Feld}}-Filter im Template; Feld 0 bleibt nur der
+    // Kompatibilitäts-Fallback für alte/lückenhafte lokale Notiztypen.
+    const sourceFields = clozeFieldNames(nt);
+    const fields = sourceFields.length ? sourceFields : nt.fields.slice(0, 1);
+    const nums = [...new Set(fields.flatMap((field) => clozeNumbers(note.fields[field] ?? '')))]
+      .sort((a, b) => a - b);
     if (nums.length === 0) return [{ templateOrd: 0, clozeNum: 1 }];
     return nums.map((n) => ({ templateOrd: 0, clozeNum: n }));
   }
@@ -67,14 +99,48 @@ function applyConditionals(tmpl: string, fields: Record<string, string>): string
 function fill(
   tmpl: string,
   fields: Record<string, string>,
-  renderValue: (s: string) => string = (s) => s,
+  renderValue: (value: string, ref: FieldReference) => string = (value) => value,
 ): string {
   return applyConditionals(tmpl, fields).replace(/\{\{([^{}#^/][^{}]*)\}\}/g, (_all, raw: string) => {
-    let name = raw.trim();
-    const colon = name.lastIndexOf(':');
-    if (colon !== -1) name = name.slice(colon + 1).trim();
-    return renderValue(fields[name] ?? '');
+    const ref = parseFieldReference(raw);
+    return renderValue(fields[ref.name] ?? '', ref);
   });
+}
+
+function renderStandardField(
+  value: string,
+  ref: FieldReference,
+  face: 'front' | 'back',
+): string {
+  if (ref.filters.includes('type')) {
+    return face === 'front'
+      ? '<input class="type-answer" type="text" autocomplete="off" aria-label="Antwort eingeben">'
+      : `<span class="type-answer-correct">${renderMarkdown(value)}</span>`;
+  }
+  if (ref.filters.includes('hint')) {
+    return `<details class="hint"><summary>Hinweis anzeigen</summary><div>${renderMarkdown(value)}</div></details>`;
+  }
+  return renderMarkdown(value);
+}
+
+function typedAnswerFromTemplate(
+  template: string,
+  fields: Record<string, string>,
+): string | null {
+  const renderedTemplate = applyConditionals(template, fields);
+  for (const match of renderedTemplate.matchAll(/\{\{([^{}#^/][^{}]*)\}\}/g)) {
+    const ref = parseFieldReference(match[1]);
+    if (ref.filters.includes('type')) return fields[ref.name] ?? '';
+  }
+  return null;
+}
+
+const FRONT_SIDE_TOKEN = '\uE000FLASHCARDS_FRONT_SIDE\uE001';
+
+function insertFrontSide(template: string, front: string): string {
+  return template
+    .replace(/\{\{\s*FrontSide\s*\}\}/g, FRONT_SIDE_TOKEN)
+    .replaceAll(FRONT_SIDE_TOKEN, front);
 }
 
 function clozeRender(text: string, num: number, reveal: boolean): string {
@@ -98,25 +164,54 @@ export function renderCard(
   note: Note,
   nt: NoteType,
   card: { templateOrd: number; clozeNum: number | null },
-): { front: string; back: string } {
+): { front: string; back: string; typeAnswer?: string } {
   if (nt.kind === 'cloze') {
-    const text = note.fields[nt.fields[0]] ?? '';
-    const extra = nt.fields[1] ? note.fields[nt.fields[1]] ?? '' : '';
     const num = card.clozeNum ?? 1;
-    // Cloze-Lücken zuerst zu <span class="cloze">…</span> auflösen, dann Markdown anwenden.
-    // Marked reicht die fertigen Spans durch und rendert Markdown im umgebenden Text.
+    const fallbackField = clozeFieldNames(nt)[0] ?? nt.fields[0] ?? 'Text';
+    const fallbackTemplate = {
+      name: 'Cloze',
+      qfmt: `{{cloze:${fallbackField}}}`,
+      afmt: `{{cloze:${fallbackField}}}`,
+    };
+    const selected = nt.templates[card.templateOrd] ?? nt.templates[0];
+    const tmpl = selected && (selected.qfmt || selected.afmt) ? selected : fallbackTemplate;
+    const renderTemplate = (source: string, reveal: boolean): string =>
+      fill(source, note.fields, (value, ref) =>
+        renderMarkdown(ref.filters.includes('cloze') ? clozeRender(value, num, reveal) : value),
+      );
+
+    // qfmt/afmt sind der Vertrag des importierten Notiztyps: Zusatzfelder erscheinen nur
+    // dort, wo das Template sie platziert. {{FrontSide}} übernimmt die vollständig gerenderte
+    // Vorderseite; der Funktions-Replacer schützt auch hier vor "$"-Ersetzungsmustern.
+    const front = renderTemplate(tmpl.qfmt, false);
+    const backTemplate = tmpl.afmt.replace(/\{\{\s*FrontSide\s*\}\}/g, FRONT_SIDE_TOKEN);
+    const back = insertFrontSide(renderTemplate(backTemplate, true), front);
     return {
-      front: sanitizeHtml(renderMarkdown(clozeRender(text, num, false))),
-      back: sanitizeHtml(
-        renderMarkdown(clozeRender(text, num, true)) + (extra ? `<hr>${renderMarkdown(extra)}` : ''),
-      ),
+      front: sanitizeHtml(front),
+      back: sanitizeHtml(back),
     };
   }
   const tmpl = nt.templates[card.templateOrd] ?? nt.templates[0];
-  const front = fill(tmpl.qfmt, note.fields, renderMarkdown);
-  // {{FrontSide}} zuerst durch die gerenderte Vorderseite ersetzen, dann übrige Felder füllen.
-  // Funktions-Replacer statt String: verhindert, dass "$&"/"$'" etc. in `front` (kommt aus
-  // Feldwerten/Markdown) von String.replace als $-Ersetzungsmuster interpretiert werden.
-  const back = fill(tmpl.afmt.replace(/\{\{FrontSide\}\}/g, () => front), note.fields, renderMarkdown);
-  return { front: sanitizeHtml(front), back: sanitizeHtml(back) };
+  const front = fill(
+    tmpl.qfmt,
+    note.fields,
+    (value, ref) => renderStandardField(value, ref, 'front'),
+  );
+  // FrontSide erst NACH dem Füllen einsetzen. Sonst würden literal vorkommende
+  // "{{…}}" aus dem bereits gerenderten Vorderseiteninhalt als Template erneut geparst.
+  const backTemplate = tmpl.afmt.replace(/\{\{\s*FrontSide\s*\}\}/g, FRONT_SIDE_TOKEN);
+  const back = insertFrontSide(
+    fill(
+      backTemplate,
+      note.fields,
+      (value, ref) => renderStandardField(value, ref, 'back'),
+    ),
+    front,
+  );
+  const typeAnswer = typedAnswerFromTemplate(tmpl.qfmt, note.fields);
+  return {
+    front: sanitizeHtml(front),
+    back: sanitizeHtml(back),
+    ...(typeAnswer === null ? {} : { typeAnswer }),
+  };
 }

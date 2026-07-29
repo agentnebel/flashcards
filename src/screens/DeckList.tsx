@@ -5,6 +5,35 @@ import { db } from '../db/db';
 import type { Deck } from '../db/db';
 import { createDeck, deleteDeck, getReviewStreak, renameDeck } from '../db/api';
 
+export function shouldActivateDeckRow(
+  key: string,
+  target: EventTarget | null,
+  currentTarget: EventTarget | null,
+): boolean {
+  return (key === 'Enter' || key === ' ') && target === currentTarget;
+}
+
+export function descendantDeckIds(decks: Deck[], rootId: string): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const deck of decks) {
+    if (!deck.parentId) continue;
+    const children = childrenByParent.get(deck.parentId);
+    if (children) children.push(deck.id);
+    else childrenByParent.set(deck.parentId, [deck.id]);
+  }
+  const seen = new Set<string>();
+  const stack = [rootId];
+  while (stack.length) {
+    const current = stack.pop() as string;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    for (const child of childrenByParent.get(current) ?? []) {
+      if (!seen.has(child)) stack.push(child);
+    }
+  }
+  return seen;
+}
+
 export default function DeckList() {
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const cards = useLiveQuery(() => db.cards.toArray(), []);
@@ -14,25 +43,9 @@ export default function DeckList() {
   const navigate = useNavigate();
 
   const descendantIdsByDeck = useMemo(() => {
-    const childrenByParent = new Map<string, string[]>();
-    for (const d of decks ?? []) {
-      if (!d.parentId) continue;
-      const children = childrenByParent.get(d.parentId);
-      if (children) children.push(d.id);
-      else childrenByParent.set(d.parentId, [d.id]);
-    }
-    return new Map((decks ?? []).map((deck) => {
-      const ids = [deck.id];
-      const stack = [deck.id];
-      while (stack.length) {
-        const cur = stack.pop() as string;
-        for (const child of childrenByParent.get(cur) ?? []) {
-          ids.push(child);
-          stack.push(child);
-        }
-      }
-      return [deck.id, new Set(ids)] as const;
-    }));
+    const allDecks = decks ?? [];
+    return new Map(allDecks.map((deck) =>
+      [deck.id, descendantDeckIds(allDecks, deck.id)] as const));
   }, [decks]);
 
   if (!decks || !cards) return <p className="muted">Lädt…</p>;
@@ -119,7 +132,7 @@ export default function DeckList() {
                 tabIndex={0}
                 onClick={() => navigate(`/app/deck/${deck.id}/study`)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
+                  if (shouldActivateDeckRow(e.key, e.target, e.currentTarget)) {
                     e.preventDefault();
                     navigate(`/app/deck/${deck.id}/study`);
                   }

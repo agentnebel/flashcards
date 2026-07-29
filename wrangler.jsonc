@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "flashcards",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-01-09",
+  "compatibility_date": "2026-07-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
@@ -28,19 +28,25 @@
     { "binding": "MEDIA", "bucket_name": "flashcards-media" }
   ]
 
-  // Rate-Limiting für /api/auth/* (Bruteforce-/Massenregistrierungs-Schutz):
-  // 10 Versuche pro IP und 60 s. "unsafe" ist Cloudflares Namensraum für das
-  // Rate-Limiting-Binding (offene Beta), nicht etwas Unsicheres.
-  ,"unsafe": {
-    "bindings": [
-      {
-        "name": "AUTH_LIMITER",
-        "type": "ratelimit",
-        "namespace_id": "1001",
-        "simple": { "limit": 10, "period": 60 }
-      }
-    ]
-  }
+  // Native Rate-Limiting-Bindings: Auth schützt gegen Brute Force; Sync begrenzt
+  // Request-Bursts. Dauerhafte Tagesbudgets liegen zusätzlich atomar in D1.
+  ,"ratelimits": [
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    {
+      "name": "SYNC_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 300, "period": 60 }
+    },
+    {
+      "name": "MEDIA_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ]
 
   // Secret: `wrangler secret put JWT_SECRET`
 }

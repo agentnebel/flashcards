@@ -30,7 +30,7 @@ const clozeNt: NoteType = {
   name: 'Cloze',
   kind: 'cloze',
   fields: ['Text', 'Extra'],
-  templates: [{ name: 'Cloze', qfmt: '', afmt: '' }],
+  templates: [{ name: 'Cloze', qfmt: '{{cloze:Text}}', afmt: '{{cloze:Text}}<hr>{{Extra}}' }],
   css: '',
   updatedAt: 0,
 };
@@ -56,6 +56,18 @@ describe('generateCards', () => {
   it('Cloze ohne Lücken: eine Fallback-Karte (c1)', () => {
     const specs = generateCards(makeNote({ Text: 'ohne' }, 'nt2'), clozeNt);
     expect(specs).toEqual([{ templateOrd: 0, clozeNum: 1 }]);
+  });
+  it('Cloze: liest die Nummern aus dem im Template referenzierten Feld', () => {
+    const nt: NoteType = {
+      ...clozeNt,
+      fields: ['Titel', 'Inhalt', 'Zusatz'],
+      templates: [{ name: 'Custom', qfmt: '{{Titel}} — {{cloze:Inhalt}}', afmt: '{{cloze:Inhalt}}' }],
+    };
+    const specs = generateCards(
+      makeNote({ Titel: '{{c9::nicht maßgeblich}}', Inhalt: '{{c2::richtig}}', Zusatz: '' }, 'nt2'),
+      nt,
+    );
+    expect(specs.map((spec) => spec.clozeNum)).toEqual([2]);
   });
   it('Standard: Template ohne Inhalt auf der Vorderseite erzeugt keine Karte', () => {
     const nt: NoteType = { ...standardNt, templates: [{ name: 'K', qfmt: '{{Missing}}', afmt: '{{Back}}' }] };
@@ -117,10 +129,31 @@ describe('renderCard (Standard)', () => {
     expect(filled.front).not.toContain('ohne');
     expect(empty.front).toContain('ohne');
   });
-  it('Anki-Feldfilter ({{hint:Feld}}) werden auf den Feldwert reduziert', () => {
+  it('Anki-Hints verbergen den Feldwert bis zum Aufklappen', () => {
     const nt: NoteType = { ...standardNt, templates: [{ name: 'K', qfmt: '{{hint:Front}}', afmt: '' }] };
     const { front } = renderCard(makeNote({ Front: 'Wert', Back: '' }), nt, { templateOrd: 0, clozeNum: null });
+    expect(front).toContain('<details');
+    expect(front).toContain('Hinweis anzeigen');
     expect(front).toContain('Wert');
+  });
+  it('Anki-Type-Filter verrät die Antwort nicht auf der Vorderseite', () => {
+    const nt: NoteType = {
+      ...standardNt,
+      templates: [{ name: 'K', qfmt: '{{type:Front}}', afmt: '{{type:Front}}' }],
+    };
+    const rendered = renderCard(makeNote({ Front: 'Geheim', Back: '' }), nt, {
+      templateOrd: 0,
+      clozeNum: null,
+    });
+    expect(rendered.front).toContain('type="text"');
+    expect(rendered.front).not.toContain('Geheim');
+    expect(rendered.back).toContain('Geheim');
+    expect(rendered.typeAnswer).toBe('Geheim');
+  });
+  it('parst literal geschweifte Klammern aus FrontSide nicht ein zweites Mal', () => {
+    const note = makeNote({ Front: 'Literal {{Unbekannt}}', Back: 'Antwort' });
+    const { back } = renderCard(note, standardNt, { templateOrd: 0, clozeNum: null });
+    expect(back).toContain('{{Unbekannt}}');
   });
 });
 
@@ -142,6 +175,34 @@ describe('renderCard (Cloze)', () => {
     expect(front).toContain('[Tipp]');
     expect(front).not.toContain('{{c1::');
     expect(back).toContain('erste<br>zweite');
+  });
+  it('verwendet Custom-qfmt/afmt, FrontSide und explizit platzierte Zusatzfelder', () => {
+    const nt: NoteType = {
+      ...clozeNt,
+      fields: ['Titel', 'Inhalt', 'Details', 'Ungenutzt'],
+      templates: [{
+        name: 'Custom',
+        qfmt: '<header>{{Titel}}</header><main>{{cloze:Inhalt}}</main>',
+        afmt: '<section>{{FrontSide}}</section><aside>{{Details}}</aside><footer>{{cloze:Inhalt}}</footer>',
+      }],
+    };
+    const customNote = makeNote({
+      Titel: 'Kapitel',
+      Inhalt: '{{c3::Antwort::Hinweis}}',
+      Details: '**Mehr**',
+      Ungenutzt: 'DARF NICHT ERSCHEINEN',
+    }, 'nt2');
+
+    const { front, back } = renderCard(customNote, nt, { templateOrd: 0, clozeNum: 3 });
+
+    expect(front).toContain('<header>');
+    expect(front).toContain('Kapitel');
+    expect(front).toContain('[Hinweis]');
+    expect(back).toContain('<section>');
+    expect(back).toContain('[Hinweis]');
+    expect(back).toContain('<aside><p><strong>Mehr</strong></p>');
+    expect(back).toContain('<span class="cloze">Antwort</span>');
+    expect(back).not.toContain('DARF NICHT ERSCHEINEN');
   });
 });
 

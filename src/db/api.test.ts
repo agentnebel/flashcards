@@ -1,8 +1,14 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyCard } from '../scheduler/fsrs';
-import { deleteDeck, deleteNote } from './api';
-import { db, type Card, type Deck, type Note, type RevlogEntry } from './db';
+import {
+  deleteDeck,
+  deleteNote,
+  exportBackupArchive,
+  importBackup,
+  importBackupFile,
+} from './api';
+import { db, type Card, type Deck, type Note, type NoteType, type RevlogEntry } from './db';
 
 function makeDeck(id: string, parentId: string | null = null): Deck {
   return { id, name: id, parentId, newPerDay: 20, updatedAt: 1 };
@@ -106,5 +112,112 @@ describe('vollständige Löschvorgänge', () => {
     await expect(db.notes.count()).resolves.toBe(0);
     await expect(db.cards.count()).resolves.toBe(0);
     await expect(db.revlog.count()).resolves.toBe(0);
+  });
+});
+
+describe('Backup-Wiederherstellung', () => {
+  it('stempelt alle konfliktfähigen Entitäten und ihre Outbox-Payloads einheitlich neu', async () => {
+    const restoredAt = Date.parse('2026-07-29T10:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(restoredAt);
+    const deck = makeDeck('restored-deck');
+    const note = makeNote('restored-note', deck.id);
+    const card = makeCard('restored-card', note.id, deck.id);
+    const noteType: NoteType = {
+      id: 'basic',
+      name: 'Einfach',
+      kind: 'standard',
+      fields: ['Front', 'Back'],
+      templates: [{ name: 'Karte 1', qfmt: '{{Front}}', afmt: '{{Back}}' }],
+      css: '',
+      updatedAt: 1,
+    };
+
+    try {
+      await importBackup(JSON.stringify({
+        decks: [deck],
+        noteTypes: [noteType],
+        notes: [note],
+        cards: [card],
+      }));
+
+      const restored = await Promise.all([
+        db.decks.get(deck.id),
+        db.noteTypes.get(noteType.id),
+        db.notes.get(note.id),
+        db.cards.get(card.id),
+      ]);
+      expect(restored.map((row) => row?.updatedAt)).toEqual([
+        restoredAt,
+        restoredAt,
+        restoredAt,
+        restoredAt,
+      ]);
+
+      const outbox = await db.outbox.orderBy('id').toArray();
+      expect(outbox).toHaveLength(4);
+      expect(outbox.map((item) => item.createdAt)).toEqual([
+        restoredAt,
+        restoredAt,
+        restoredAt,
+        restoredAt,
+      ]);
+      expect(outbox.map((item) => (item.payload as { updatedAt: number }).updatedAt)).toEqual([
+        restoredAt,
+        restoredAt,
+        restoredAt,
+        restoredAt,
+      ]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('exportiert und importiert ein vollständiges ZIP-Backup ohne Base64-Limitbruch', async () => {
+    const deck = makeDeck('archive-deck');
+    const note = makeNote('archive-note', deck.id);
+    const bytes = new TextEncoder().encode('backup-image');
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hash = [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+    await db.decks.add(deck);
+    await db.notes.add(note);
+    const mediaRow = {
+      hash,
+      blob: new Blob([bytes], { type: 'image/png' }),
+      mime: 'image/png',
+      size: bytes.byteLength,
+      width: 2,
+      height: 3,
+      createdAt: 1,
+      synced: 1 as const,
+    };
+    // fake-indexeddb serialisiert jsdom-Blobs nicht bytegetreu. Für den Exportpfad
+    // das echte Browser-Blob liefern; der produktive IndexedDB-Pfad behält es ebenfalls.
+    const mediaRows = vi.spyOn(db.media, 'toArray').mockResolvedValue([mediaRow]);
+
+    const archive = await exportBackupArchive();
+    mediaRows.mockRestore();
+    expect(archive.type).toBe('application/zip');
+    await db.transaction('rw', db.tables, async () => {
+      await Promise.all(db.tables.map((table) => table.clear()));
+    });
+
+    const result = await importBackupFile(
+      new File([archive], 'backup.flashcards.zip', { type: 'application/zip' }),
+    );
+
+    expect(result).toMatchObject({ decks: 1, notes: 1, media: 1 });
+    await expect(db.decks.get(deck.id)).resolves.toMatchObject({ id: deck.id });
+    await expect(db.notes.get(note.id)).resolves.toMatchObject({ id: note.id });
+    const restoredMedia = await db.media.get(hash);
+    expect(restoredMedia).toMatchObject({
+      hash,
+      mime: 'image/png',
+      width: 2,
+      height: 3,
+      synced: 0,
+      size: bytes.byteLength,
+    });
   });
 });
