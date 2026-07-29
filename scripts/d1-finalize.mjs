@@ -14,7 +14,7 @@ const sql = readFileSync(
 const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const result = spawnSync(
   command,
-  ['wrangler', 'd1', 'execute', 'flashcards-db', mode, '--command', sql, '--json'],
+  ['wrangler', 'd1', 'execute', 'flashcards-db', mode, `--command=${sql}`, '--json'],
   { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
 );
 if (result.status !== 0) {
