@@ -20,7 +20,7 @@ Eine Lernkarten-App fürs Handy und den Browser. Karten anlegen, lernen, von üb
 
 **Übersicht**
 - Die Decks-Seite zeigt direkt: wie viele Karten heute fällig sind und wie viele Tage am Stück schon gelernt wurde (Streak).
-- Jedes Deck zeigt farbige Zähler — grün für fällige Reviews, blau für neue Karten.
+- Jedes Deck zeigt farbige Zähler — grün für fällige Reviews, blau für neue Karten (gedeckelt auf das Tageslimit des Decks, abzüglich heute bereits gelernter neuer Karten).
 
 **Karten erstellen**
 - Drei Kartentypen: einfach Vorder-/Rückseite, Vorder-/Rückseite mit automatischer Umkehrung und Lückentext.
@@ -35,9 +35,10 @@ Eine Lernkarten-App fürs Handy und den Browser. Karten anlegen, lernen, von üb
 - Ältere `.apkg`-Dateien (Karteikarten-Export im verbreiteten Format) werden ebenfalls eingelesen.
 
 **Sync**
-- In den Einstellungen einmal registrieren und anmelden.
+- In den Einstellungen einmal registrieren (Einladungscode erforderlich, siehe unten) und anmelden.
 - Danach werden Karten und Reviews automatisch über alle Geräte synchronisiert — beim Start, beim Öffnen, beim Online-Gehen und alle 60 Sekunden.
 - Bilder werden über Cloudflare R2 synchronisiert, wenn R2 aktiviert ist.
+- Tägliche Sync-Budgets schützen das gemeinsame Cloudflare-Kontingent: Sehr große Importe werden dadurch über mehrere Tage verteilt hochgeladen (die App setzt automatisch fort, nichts geht verloren).
 
 **Datensicherung**
 - Über Einstellungen → Backup lässt sich alles als kompaktes `.flashcards.zip` exportieren, Bilder inklusive.
@@ -99,7 +100,7 @@ npm run build   # baut nach ./dist
 Wer auch den Cloudflare-Teil (Login, Sync über mehrere Geräte) lokal ausprobieren will:
 
 ```bash
-echo 'JWT_SECRET=dev-secret-at-least-16-characters' > .dev.vars
+echo 'JWT_SECRET=dev-secret-with-at-least-32-characters' > .dev.vars
 npm run db:schema:local
 npm run db:invite:local
 npm run build
@@ -121,7 +122,7 @@ npx wrangler d1 create flashcards-db
 # Medien-Bucket:
 npx wrangler r2 bucket create flashcards-media
 
-# JWT-Secret setzen:
+# JWT-Secret setzen (mindestens 32 Zeichen, sonst antwortet die Auth mit 500):
 npx wrangler secret put JWT_SECRET
 
 # Schema in die Remote-DB:
