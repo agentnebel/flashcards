@@ -262,6 +262,27 @@ describe('importApkg', () => {
     ])).resolves.toEqual([0, 0, 0, 0, 0]);
   });
 
+  it('importiert auch Bilder mit unquotetem src-Attribut und normalisiert die Referenz', async () => {
+    await addTargetDeck();
+    const unquoted = await makeApkg({
+      models: basicModels(),
+      notes: [[
+        'unquoted-guid',
+        1,
+        '<img src=bild.png alt=x>Frage\u001fAntwort',
+      ]],
+      media: { 0: new Uint8Array([1, 2, 3]) },
+      mediaManifest: { 0: 'bild.png' },
+    });
+
+    const result = await importApkg(unquoted, 'target-deck');
+
+    expect(result).toMatchObject({ notes: 1, cards: 1, media: 1 });
+    const [note] = await db.notes.toArray();
+    const [media] = await db.media.toArray();
+    expect(note.fields.Front).toBe(`<img src="flashmedia:${media.hash}" alt=x>Frage`);
+  });
+
   it('committet keine Medien, wenn alle referenzierenden Notizen übersprungen werden', async () => {
     await addTargetDeck();
     await db.notes.add({

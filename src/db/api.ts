@@ -172,14 +172,17 @@ async function updateNoteUnlocked(
   newNoteTypeId?: string,
 ): Promise<void> {
   const note = await db.notes.get(noteId);
-  if (!note) return;
+  // Laut werden statt still zurückkehren: Der Aufrufer (AddCard) würde ein silent return
+  // als Erfolg werten und wegnavigieren — die Eingabe wäre kommentarlos verloren, z. B.
+  // wenn die Notiz während des Bearbeitens per Sync von einem anderen Gerät gelöscht wurde.
+  if (!note) throw new Error('Die Notiz wurde inzwischen gelöscht (z. B. auf einem anderen Gerät).');
   const resolvedNoteTypeId = newNoteTypeId ?? note.noteTypeId;
   const deckId = newDeckId ?? note.deckId;
   const [nt, deck] = await Promise.all([
     db.noteTypes.get(resolvedNoteTypeId),
     db.decks.get(deckId),
   ]);
-  if (!nt) return;
+  if (!nt) throw new Error('Notiztyp nicht gefunden');
   if (!deck) throw new Error('Ziel-Deck wurde nicht gefunden');
   const now = Date.now();
   const updated: Note = { ...note, fields, noteTypeId: resolvedNoteTypeId, sortField: fields[nt.fields[0]] ?? '', deckId, updatedAt: now };
@@ -319,24 +322,32 @@ async function importNotesUnlocked(params: {
 
 // Lern-Streak: aufeinanderfolgende lokale Tage mit mindestens einem Review.
 // Heute noch nichts gelernt? Streak bleibt bis Tagesende erhalten (ab gestern gezählt).
+// Tagesweise rückwärts per indexierter Range-Abfrage prüfen (first() bricht nach dem
+// ersten Treffer ab): Kosten O(Streak-Länge) statt alle reviewedAt-Keys zu laden —
+// die DeckList fragt den Streak live nach jedem Review erneut ab.
 export async function getReviewStreak(): Promise<number> {
-  const keys = (await db.revlog.orderBy('reviewedAt').keys()) as number[];
-  if (keys.length === 0) return 0;
-  const dayKey = (ms: number) => {
-    const d = new Date(ms);
-    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const hasReviewOnDayOf = async (cursor: Date): Promise<boolean> => {
+    const start = new Date(cursor);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    const first = await db.revlog
+      .where('reviewedAt')
+      .between(start.getTime(), end.getTime(), true, false)
+      .first();
+    return first !== undefined;
   };
-  const days = new Set(keys.map(dayKey));
+
   const cursor = new Date();
-  if (!days.has(dayKey(cursor.getTime()))) {
+  if (!(await hasReviewOnDayOf(cursor))) {
     cursor.setDate(cursor.getDate() - 1);
-    if (!days.has(dayKey(cursor.getTime()))) return 0;
+    if (!(await hasReviewOnDayOf(cursor))) return 0;
   }
   let streak = 0;
-  while (days.has(dayKey(cursor.getTime()))) {
+  do {
     streak++;
     cursor.setDate(cursor.getDate() - 1);
-  }
+  } while (await hasReviewOnDayOf(cursor));
   return streak;
 }
 

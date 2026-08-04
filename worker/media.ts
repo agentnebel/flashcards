@@ -25,6 +25,7 @@ const GC_MEDIA_PAGE_SIZE = 1_000;
 const GC_REFERENCE_CLEANUP_PAGE_SIZE = 900;
 const GC_REQUEST_BUDGET_BLOCK = 10;
 const R2_CLASS_B_BUDGET_BLOCK = 40;
+const scanEncoder = new TextEncoder();
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/avif',
   'image/bmp',
@@ -636,7 +637,7 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
 
       let consumed = 0;
       for (const row of page.results) {
-        const rowBytes = new TextEncoder().encode(row.payload ?? '').byteLength;
+        const rowBytes = scanEncoder.encode(row.payload ?? '').byteLength;
         if (scanned > 0 && scannedBytes + rowBytes > MAX_GC_NOTE_BYTES_PER_RUN) {
           break scanPages;
         }

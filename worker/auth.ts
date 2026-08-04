@@ -69,6 +69,9 @@ async function pbkdf2(password: string, salt: Uint8Array, iterations: number): P
 }
 async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
+  // 100.000 ist das harte PBKDF2-Iterationslimit der Workers-WebCrypto-Runtime — mehr
+  // (OWASP empfiehlt 600k) lehnt deriveBits dort ab. Die Iterationszahl steht im
+  // Hash-Format; eine spätere Erhöhung kann Altkonten beim Login transparent re-hashen.
   const iter = 100000;
   const bits = await pbkdf2(password, salt, iter);
   return `pbkdf2$${iter}$${b64urlEncode(salt)}$${b64urlEncode(bits)}`;
@@ -92,7 +95,10 @@ function normalizeEmail(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
 }
 function secretOk(env: Env): boolean {
-  return typeof env.JWT_SECRET === 'string' && env.JWT_SECRET.length >= 16;
+  // 32 Zeichen Minimum: Bei HS256 sollte der Schlüssel mindestens die Hash-Breite
+  // (256 Bit) an Entropie mitbringen. Vor dem Deploy sicherstellen, dass das gesetzte
+  // Secret lang genug ist (`wrangler secret put JWT_SECRET`), sonst antwortet Auth mit 500.
+  return typeof env.JWT_SECRET === 'string' && env.JWT_SECRET.length >= 32;
 }
 const MAX_PW = 1024;
 const MAX_AUTH_BODY_BYTES = 8 * 1024;

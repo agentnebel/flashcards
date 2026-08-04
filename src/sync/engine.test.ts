@@ -514,6 +514,91 @@ describe('Outbox-Batching gemäß Serververtrag', () => {
     expect(newAttempts).toBe(3);
     await expect(db.outbox.count()).resolves.toBe(0);
   });
+
+  it('behandelt das Objektlimit als transient statt den Eintrag dauerhaft abzulehnen', async () => {
+    await db.meta.put({
+      key: 'auth',
+      value: { token: 'token', userId: 'user', email: 'user@example.test' },
+    });
+    await db.outbox.add({
+      op: 'upsert',
+      entity: 'revlog',
+      entityId: 'review-at-limit',
+      payload: { id: 'review-at-limit' },
+      createdAt: 1,
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === '/api/sync/pull') return Promise.resolve(emptyPullResponse());
+      if (path === '/api/sync/push') {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: 'Sync-Objektlimit erreicht (max. 50000 pro Konto)',
+          code: 'SYNC_OBJECT_LIMIT',
+        }), { status: 413, headers: { 'Content-Type': 'application/json' } }));
+      }
+      if (path === '/api/media/gc') return Promise.resolve(new Response(JSON.stringify({ deleted: 0 })));
+      throw new Error(`Unerwarteter Request: ${path}`);
+    }));
+
+    await sync();
+
+    // Löschungen können später wieder Platz schaffen — der Eintrag bleibt sendbar,
+    // statt per syncError dauerhaft aus jedem künftigen Push herauszufallen.
+    const [item] = await db.outbox.toArray();
+    expect(item.syncError).toBeUndefined();
+    expect(getSyncState().error).toContain('Objektlimit');
+  });
+});
+
+describe('Pull-Schemaprüfung', () => {
+  it('überspringt strukturell kaputte Remote-Payloads statt sie still zu übernehmen', async () => {
+    await db.meta.put({
+      key: 'auth',
+      value: { token: 'token', userId: 'user', email: 'user@example.test' },
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = String(input);
+      if (path === '/api/sync/pull') {
+        return Promise.resolve(new Response(JSON.stringify({
+          cursor: 2,
+          changes: [
+            {
+              entity: 'card',
+              entityId: 'broken-card',
+              deleted: false,
+              // due und fsrs fehlen → würde lokal als Invalid Date landen und nie fällig.
+              payload: { id: 'broken-card', noteId: 'n1', deckId: 'd1', updatedAt: 5 },
+              seq: 1,
+            },
+            {
+              entity: 'deck',
+              entityId: 'valid-deck',
+              deleted: false,
+              payload: { id: 'valid-deck', name: 'OK', parentId: null, newPerDay: 20, updatedAt: 5 },
+              seq: 2,
+            },
+          ],
+          hasMore: false,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      if (path === '/api/media/gc') return Promise.resolve(new Response(JSON.stringify({ deleted: 0 })));
+      throw new Error(`Unerwarteter Request: ${path}`);
+    }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await sync();
+    } finally {
+      warn.mockRestore();
+    }
+
+    // Der kaputte Datensatz wird übersprungen, gültige dahinter kommen an, der Cursor
+    // läuft weiter (kein dauerhaft hängender Sync wegen eines Einzelfalls).
+    await expect(db.cards.count()).resolves.toBe(0);
+    await expect(db.decks.get('valid-deck')).resolves.toMatchObject({ name: 'OK' });
+    await expect(db.meta.get('syncCursor')).resolves.toMatchObject({ value: 2 });
+    expect(getSyncState().error).toBeNull();
+  });
 });
 
 describe('Medienfehler isolieren', () => {

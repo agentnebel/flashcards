@@ -135,6 +135,12 @@ class FlashcardsDB extends Dexie {
     this.version(3).stores({
       notes: 'id, guid, deckId, noteTypeId, updatedAt',
     });
+    // v4: Compound-Index für den Pending-Lookup des Sync-Pulls (applyChange). Ohne ihn
+    // scannt jeder gepullte Datensatz alle Outbox-Einträge seiner Entität (O(n²) beim
+    // Initial-Pull direkt nach einem großen Import).
+    this.version(4).stores({
+      outbox: '++id, entity, createdAt, [entity+entityId]',
+    });
   }
 }
 

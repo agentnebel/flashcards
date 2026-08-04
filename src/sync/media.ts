@@ -231,6 +231,11 @@ export async function uploadPendingMedia(
         }
         // Einzelne alte Datei oberhalb der heutigen Grenze überspringen.
         failed += 1;
+      } else if (res.status === 409) {
+        // MEDIA_DELETE_IN_PROGRESS: Der Server-GC beansprucht genau diese Datei gerade.
+        // Transient und dateispezifisch — weder als Fehler zählen (sonst meldet der Sync
+        // dauerhaft "konnte nicht synchronisiert werden") noch die restlichen Uploads
+        // abbrechen. Der Blob bleibt pending; der nächste Sync-Lauf versucht es erneut.
       } else {
         // Rate-Limit, deaktiviertes R2, Auth- oder Serverfehler gelten für die folgenden
         // Requests voraussichtlich ebenfalls. Abbrechen statt tausende identische Fehler

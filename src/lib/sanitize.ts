@@ -11,7 +11,12 @@ import DOMPurify from 'dompurify';
 // sowie blob: und data: (bereits aufgelöste bzw. eingebettete Bilder).
 const URI_RE = /^(?:(?:https?|mailto|tel|flashmedia|blob|data):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
+// <form> braucht keine Karte, ermöglicht aber Phishing-Attrappen in importierten Decks.
+// Die CSP (form-action 'self') fängt Submits zwar ab — das Tag selbst hat trotzdem nichts
+// in Karteninhalten verloren. <input> bleibt erlaubt (type-answer-Karten).
+const FORBID_TAGS = ['form'];
+
 export function sanitizeHtml(html: string): string {
   if (!html) return '';
-  return DOMPurify.sanitize(html, { ALLOWED_URI_REGEXP: URI_RE });
+  return DOMPurify.sanitize(html, { ALLOWED_URI_REGEXP: URI_RE, FORBID_TAGS });
 }

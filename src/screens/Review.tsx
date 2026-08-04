@@ -95,6 +95,9 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   );
   // Sitzungsgröße für den Fortschrittsring: erledigt + verbleibend.
   const total = done + (queue?.length ?? 0);
+  // Nur bei Kartenwechsel neu scopen: der Parser liefe sonst bei jedem Swipe-Pointer-Move
+  // (setDrag → Re-Render) über das komplette Notiztyp-CSS importierter Decks.
+  const scopedCardCss = useMemo(() => scopeImportedCardCss(rendered?.css ?? ''), [rendered]);
 
   // In dieser Session bereits beantwortete Karten – schützt vor Doppelbewertung und
   // verhindert, dass ein Reload eine gerade (write-behind) beantwortete Karte zurückholt,
@@ -488,7 +491,6 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   const pct = total > 0 ? done / total : 0;
   const swipeHint = drag > 24 ? 'good' : drag < -24 ? 'again' : null;
   const faceHtml = rendered ? (revealed ? rendered.back : rendered.front) : null;
-  const scopedCardCss = scopeImportedCardCss(rendered?.css ?? '');
   const cardStyle: React.CSSProperties = drag !== 0 || leaving
     ? {
         transform: `translateX(${drag}px) rotate(${drag * 0.04}deg)`,

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { db, type Card, type Deck, type Note } from '../db/db';
 import { deleteDeck, deleteNote, getDescendantDeckIds } from '../db/api';
 import { stripMarkdown } from '../lib/markdown';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { State } from 'ts-fsrs';
 
 const STATE_LABEL: Record<number, string> = {
@@ -59,14 +60,17 @@ export default function Browse() {
   const cards = useLiveQuery(() => db.cards.toArray(), []);
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const [q, setQ] = useState('');
+  // Suche entprellen: der Volltext-Filter läuft über alle Felder aller Notizen und würde
+  // sonst bei jedem Tastendruck komplett neu rechnen (spürbar ab einigen tausend Notizen).
+  const query = useDebouncedValue(q, 150);
   const [visible, setVisible] = useState(PAGE);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [deletingDeckId, setDeletingDeckId] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
-  // Bei neuer Suche das Fenster zurücksetzen.
-  useEffect(() => { setVisible(PAGE); }, [q]);
+  // Bei neuer (angewandter) Suche das Fenster zurücksetzen.
+  useEffect(() => { setVisible(PAGE); }, [query]);
 
   const deckById = useMemo(() => {
     const m = new Map<string, Deck>();
@@ -87,13 +91,13 @@ export default function Browse() {
   }, [cards]);
 
   const filtered = useMemo(() => {
-    const needle = q.toLowerCase();
+    const needle = query.toLowerCase();
     return (notes ?? []).filter(
       (n) =>
         !n.deleted &&
         (!needle || Object.values(n.fields).some((v) => v.toLowerCase().includes(needle))),
     );
-  }, [notes, q]);
+  }, [notes, query]);
 
   // Notizen nach Deck gruppieren; Sektionen alphabetisch nach Deck-Pfad. Innerhalb einer
   // Sektion bleibt die „zuletzt bearbeitet"-Reihenfolge erhalten (filtered ist so sortiert).
@@ -117,7 +121,7 @@ export default function Browse() {
     | { kind: 'note'; note: Note };
   // Bei aktiver Suche das Einklappen überstimmen, sonst blieben Treffer in einer zuvor
   // eingeklappten Sektion unsichtbar.
-  const searching = q.trim() !== '';
+  const searching = query.trim() !== '';
   const items = useMemo(() => {
     const out: Item[] = [];
     for (const g of groups) {

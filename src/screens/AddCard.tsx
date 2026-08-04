@@ -37,7 +37,12 @@ export default function AddCard() {
 
   const decks = useLiveQuery(() => db.decks.toArray(), []);
   const noteTypes = useLiveQuery(() => db.noteTypes.toArray(), []);
-  const existingNote = useLiveQuery(() => noteId ? db.notes.get(noteId) : Promise.resolve(undefined), [noteId]) as import('../db/db').Note | undefined;
+  // undefined = lädt noch, null = Notiz existiert nicht (mehr) — nur so lässt sich der
+  // Ladezustand von einer unbekannten/gelöschten noteId unterscheiden.
+  const existingNote = useLiveQuery(
+    () => (noteId ? db.notes.get(noteId).then((note) => note ?? null) : Promise.resolve(undefined)),
+    [noteId],
+  ) as import('../db/db').Note | null | undefined;
 
   const [deckId, setDeckId] = useState('');
   const [noteTypeId, setNoteTypeId] = useState('');
@@ -130,6 +135,19 @@ export default function AddCard() {
   }, [nt]);
 
   if (!decks || !noteTypes) return <p className="muted">Lädt…</p>;
+
+  // Unbekannte/gelöschte noteId klar benennen statt ein leeres Rumpf-Formular zu zeigen.
+  // Verschwindet die Notiz erst NACH dem Laden (Sync-Pull), bleibt das Formular sichtbar —
+  // updateNote liefert beim Speichern dann eine klare Fehlermeldung statt stillen Verlusts.
+  if (isEdit && existingNote === null && loadedNoteIdRef.current !== noteId) {
+    return (
+      <div>
+        <h1 className="screen-title">Karte bearbeiten</h1>
+        <p className="empty">Diese Notiz wurde nicht gefunden (evtl. bereits gelöscht).</p>
+        <button className="back-btn" onClick={() => navigate('/app/browse')}>← Zurück zu den Karten</button>
+      </div>
+    );
+  }
 
   const canSave = nt && Object.values(fields).some((v) => v.trim());
 

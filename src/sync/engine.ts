@@ -261,6 +261,36 @@ function tableFor(entity: string): Table<Row, string> | null {
   }
 }
 
+// Minimale Schemaprüfung je Entität NACH revive: Der Server validiert nur generische
+// JSON-Sicherheit, nicht die Fachstruktur. Ein defekter Payload eines anderen Clients
+// (z. B. Karte ohne `due` → Invalid Date → nie fällig) würde sonst still übernommen und
+// wäre lokal kaum noch auffindbar. Kaputte Datensätze werden übersprungen und geloggt;
+// der Cursor läuft weiter, damit ein Einzelfall nicht den ganzen Sync blockiert.
+function isValidSyncedEntity(entity: string, p: Record<string, unknown>): boolean {
+  const validDate = (value: unknown): boolean =>
+    value instanceof Date && !Number.isNaN(value.getTime());
+  const isString = (value: unknown): boolean => typeof value === 'string';
+  switch (entity) {
+    case 'deck':
+      return isString(p.name);
+    case 'note':
+      return isString(p.deckId) && isString(p.noteTypeId) &&
+        Boolean(p.fields) && typeof p.fields === 'object' && !Array.isArray(p.fields);
+    case 'card': {
+      const fsrs = p.fsrs as { due?: unknown } | undefined;
+      return isString(p.noteId) && isString(p.deckId) && validDate(p.due) &&
+        Boolean(fsrs) && typeof fsrs === 'object' && validDate(fsrs?.due);
+    }
+    case 'revlog':
+      return isString(p.cardId) && validDate(p.due) &&
+        typeof p.reviewedAt === 'number' && Number.isFinite(p.reviewedAt);
+    case 'noteType':
+      return isString(p.name) && Array.isArray(p.fields) && Array.isArray(p.templates);
+    default:
+      return true;
+  }
+}
+
 // JSON-Transport serialisiert Date → String; hier wieder zu Date-Objekten machen.
 function revive(entity: string, payload: unknown): Record<string, unknown> | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -295,9 +325,8 @@ async function applyChange(ch: PullChange): Promise<void> {
         ? local.reviewedAt
         : 0;
   const pending = await db.outbox
-    .where('entity')
-    .equals(ch.entity)
-    .and((item) => item.entityId === ch.entityId)
+    .where('[entity+entityId]')
+    .equals([ch.entity, ch.entityId])
     .count();
   const payloadAt =
     ch.payload && typeof ch.payload === 'object' &&
@@ -313,6 +342,10 @@ async function applyChange(ch: PullChange): Promise<void> {
   }
   const payload = revive(ch.entity, ch.payload);
   if (!payload) return;
+  if (!isValidSyncedEntity(ch.entity, payload)) {
+    console.warn('Ungültigen Sync-Datensatz übersprungen:', ch.entity, ch.entityId);
+    return;
+  }
 
   // Revlog ist unveränderlich – nur einfügen, wenn noch nicht vorhanden.
   if (ch.entity === 'revlog') {
@@ -406,7 +439,11 @@ async function pushBatchWithIsolation(
       error?: unknown;
       code?: unknown;
     };
-    const quotaDeferred = body.code === 'SYNC_STORAGE_LIMIT';
+    // Speicher- UND Objektlimit sind transiente Kontozustände: Löschungen können wieder
+    // Platz schaffen. Solche Items dürfen nicht dauerhaft als rejected markiert werden,
+    // sonst blieben z. B. neue Reviews eines vollen Kontos für immer lokal.
+    const quotaDeferred =
+      body.code === 'SYNC_STORAGE_LIMIT' || body.code === 'SYNC_OBJECT_LIMIT';
     if (items.length > 1) {
       // Das harte Objektlimit oder ein unerwartet engerer Serververtrag darf nicht den
       // ganzen Head-Block festhalten: rekursiv teilen, erfolgreiche Updates durchlassen.

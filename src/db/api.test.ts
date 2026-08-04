@@ -5,6 +5,7 @@ import {
   deleteDeck,
   deleteNote,
   exportBackupArchive,
+  getReviewStreak,
   importBackup,
   importBackupFile,
 } from './api';
@@ -219,5 +220,48 @@ describe('Backup-Wiederherstellung', () => {
       synced: 0,
       size: bytes.byteLength,
     });
+  });
+});
+
+describe('Lern-Streak', () => {
+  // Lokale Tagesmitte n Tage vor heute — explizite Kalenderarithmetik statt 24h-Offsets,
+  // damit die Tests auch über Zeitumstellungen hinweg deterministisch bleiben.
+  function dayAt(daysAgo: number): number {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - daysAgo);
+    return d.getTime();
+  }
+
+  it('zählt zusammenhängende Tage inklusive heute', async () => {
+    await db.revlog.bulkAdd([
+      { ...makeRevlog('r0', 'c1'), reviewedAt: dayAt(0) },
+      { ...makeRevlog('r1', 'c1'), reviewedAt: dayAt(1) },
+      { ...makeRevlog('r2', 'c1'), reviewedAt: dayAt(2) },
+    ]);
+    await expect(getReviewStreak()).resolves.toBe(3);
+  });
+
+  it('behält den Streak bis Tagesende, wenn heute noch nichts gelernt wurde', async () => {
+    await db.revlog.bulkAdd([
+      { ...makeRevlog('r1', 'c1'), reviewedAt: dayAt(1) },
+      { ...makeRevlog('r2', 'c1'), reviewedAt: dayAt(2) },
+    ]);
+    await expect(getReviewStreak()).resolves.toBe(2);
+  });
+
+  it('bricht am ersten Tag ohne Review ab', async () => {
+    await db.revlog.bulkAdd([
+      { ...makeRevlog('r0', 'c1'), reviewedAt: dayAt(0) },
+      { ...makeRevlog('r2', 'c1'), reviewedAt: dayAt(2) },
+    ]);
+    await expect(getReviewStreak()).resolves.toBe(1);
+  });
+
+  it('liefert 0 ohne Reviews heute und gestern', async () => {
+    await db.revlog.add({ ...makeRevlog('r2', 'c1'), reviewedAt: dayAt(2) });
+    await expect(getReviewStreak()).resolves.toBe(0);
+    await db.revlog.clear();
+    await expect(getReviewStreak()).resolves.toBe(0);
   });
 });

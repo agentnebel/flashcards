@@ -62,8 +62,9 @@ export default function App() {
   const syncState = useSyncExternalStore(subscribeSync, getSyncState);
   const online = useOnlineStatus();
   // Anzahl noch nicht synchronisierter lokaler Änderungen (Outbox). Live, damit das
-  // Offline-Badge mitzählt, während offline weiter gelernt/bearbeitet wird.
-  const pending = useLiveQuery(() => db.outbox.count(), [], 0);
+  // Offline-Badge mitzählt, während offline weiter gelernt/bearbeitet wird. Dauerhaft
+  // abgelehnte Einträge (syncError) zählen nicht: sie werden bei Verbindung NICHT gesendet.
+  const pending = useLiveQuery(() => db.outbox.filter((item) => !item.syncError).count(), [], 0);
   const location = useLocation();
 
   // Während des Lernens (Review/Wiederholung) auf Mobile die Tableiste ausblenden (Fokus).

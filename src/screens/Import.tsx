@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { db } from '../db/db';
 import { importNotes } from '../db/api';
 import { parseCsv } from '../lib/csv';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 
 export default function Import() {
   const decks = useLiveQuery(() => db.decks.toArray(), []);
@@ -104,7 +105,10 @@ function CsvSection({
   }, [noteTypes, noteTypeId]);
 
   const nt = useMemo(() => noteTypes.find((t) => t.id === noteTypeId), [noteTypes, noteTypeId]);
-  const parsed = useMemo(() => (text.trim() ? parseCsv(text) : null), [text]);
+  // Entprellt parsen: Beim Tippen/Einfügen großer CSV-Texte würde sonst jeder Tastendruck
+  // den kompletten Text neu durch den Parser schicken.
+  const csvText = useDebouncedValue(text, 300);
+  const parsed = useMemo(() => (csvText.trim() ? parseCsv(csvText) : null), [csvText]);
   const colCount = useMemo(
     () => (parsed ? parsed.rows.reduce((m, r) => Math.max(m, r.length), 0) : 0),
     [parsed],

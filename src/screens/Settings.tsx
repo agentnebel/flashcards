@@ -34,7 +34,12 @@ export default function Settings() {
   const [backupBusy, setBackupBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const auth = useLiveQuery(() => db.meta.get('auth'), [])?.value as Auth | undefined;
-  const outboxCount = useLiveQuery(() => db.outbox.count(), []) ?? 0;
+  // Nur tatsächlich sendbare Einträge zählen: dauerhaft abgelehnte (syncError) würden die
+  // Anzeige "offen: N" sonst nie wieder auf 0 fallen lassen.
+  const outboxCount = useLiveQuery(
+    () => db.outbox.filter((item) => !item.syncError).count(),
+    [],
+  ) ?? 0;
   const pendingMediaCount = useLiveQuery(() => db.media.where('synced').equals(0).count(), []) ?? 0;
 
   useEffect(() => {
@@ -57,7 +62,9 @@ export default function Settings() {
       a.href = url;
       a.download = `flashcards-backup-${new Date().toISOString().slice(0, 10)}.flashcards.zip`;
       a.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      // Nicht sofort revoken: Safari bricht große Downloads ab, wenn die Object-URL vor
+      // dem eigentlichen Download-Start freigegeben wird. Eine Minute reicht sicher.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       setImportMsg(`Export fehlgeschlagen: ${(err as Error).message}`);
     } finally {

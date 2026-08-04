@@ -182,6 +182,32 @@ describe('Pending-Medien-Upload', () => {
     await expect(db.media.where('synced').equals(0).count()).resolves.toBe(64);
   });
 
+  it('überspringt eine gerade vom GC beanspruchte Datei (409), ohne Fehler oder Abbruch', async () => {
+    const hashes = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)];
+    await db.media.bulkAdd(hashes.map((hash) => makeMedia(hash, 0)));
+    let uploads = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      if (String(input).endsWith('/api/media/exists')) {
+        const body = JSON.parse(String(init?.body)) as { hashes: string[] };
+        return Promise.resolve(new Response(JSON.stringify({ have: [], missing: body.hashes })));
+      }
+      uploads += 1;
+      // Zweiter Upload: GC-Claim (MEDIA_DELETE_IN_PROGRESS) — transient, kein Fehler.
+      if (uploads === 2) {
+        return Promise.resolve(new Response(
+          JSON.stringify({ error: 'wird bereinigt', code: 'MEDIA_DELETE_IN_PROGRESS' }),
+          { status: 409 },
+        ));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ hash: hashes[uploads - 1] }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(uploadPendingMedia('', 'token')).resolves.toEqual({ uploaded: 2, failed: 0 });
+    expect(uploads).toBe(3);
+    await expect(db.media.get(hashes[1])).resolves.toMatchObject({ synced: 0 });
+  });
+
   it('markiert einen Upload bei abweichendem Server-Hash nicht als synchronisiert', async () => {
     const hash = 'a'.repeat(64);
     await db.media.add(makeMedia(hash, 0));

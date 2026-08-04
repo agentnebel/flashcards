@@ -23,7 +23,11 @@ const MAX_APKG_BYTES = 100 * 1024 * 1024;
 const MAX_APKG_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 const MAX_APKG_ENTRY_BYTES = 150 * 1024 * 1024;
 const MAX_APKG_ENTRIES = 10_000;
-const IMG_RE = /(<img\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi;
+// Erkennt src="…", src='…' UND unquotetes src=… — altes Anki-HTML enthält gelegentlich
+// <img src=bild.jpg>; solche Bilder gingen sonst beim Import kommentarlos verloren.
+// Genau eine der Gruppen 2–4 matcht; das Rewrite normalisiert auf doppelte Anführungszeichen.
+const IMG_RE = /(<img\b[^>]*?\bsrc\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi;
+const imgSrcOf = (match: RegExpMatchArray): string => match[2] ?? match[3] ?? match[4] ?? '';
 const FLASHMEDIA_RE = /flashmedia:([a-f0-9]{64})/g;
 export const MAX_SYNC_MEDIA_BYTES = 15 * 1024 * 1024;
 
@@ -421,10 +425,24 @@ async function importApkgUnlocked(file: File, deckId: string): Promise<ApkgResul
     const allNames = new Set<string>();
     for (const [, , flds] of rows) {
       for (const v of String(flds).split(FIELD_SEP)) {
-        for (const m of v.matchAll(IMG_RE)) allNames.add(safeDecode(m[2]));
+        for (const m of v.matchAll(IMG_RE)) {
+          const src = imgSrcOf(m);
+          if (src) allNames.add(safeDecode(src));
+        }
       }
     }
-    for (const n of allNames) await ensureMedia(n);
+    // Begrenzte Parallelität statt strikt sequenziell: Hashing/Dekodieren vieler kleiner
+    // Bilder überlappt sich, ohne dass die Canvas-Normalisierung großer Bilder das Gerät
+    // überlastet. Jeder Dateiname wird genau einmal aus der Queue gezogen; ensureMedia
+    // schreibt nur in dateinamens- bzw. hash-eindeutige Maps (letzte identische Inhalte
+    // überschreiben sich idempotent).
+    const APKG_MEDIA_CONCURRENCY = 3;
+    const mediaQueue = [...allNames];
+    await Promise.all(Array.from({ length: APKG_MEDIA_CONCURRENCY }, async () => {
+      for (let name = mediaQueue.shift(); name !== undefined; name = mediaQueue.shift()) {
+        await ensureMedia(name);
+      }
+    }));
 
     const mediaNames = (names: string[]): string => {
       const sample = names.slice(0, 3).join(', ');
@@ -466,9 +484,10 @@ async function importApkgUnlocked(file: File, deckId: string): Promise<ApkgResul
     }
 
     const rewrite = (value: string): string =>
-      value.replace(IMG_RE, (full, pre: string, src: string, post: string) => {
+      value.replace(IMG_RE, (full, pre: string, dq?: string, sq?: string, uq?: string) => {
+        const src = dq ?? sq ?? uq ?? '';
         const h = nameToHash[safeDecode(src)];
-        return h ? `${pre}flashmedia:${h}${post}` : full;
+        return h ? `${pre}"flashmedia:${h}"` : full;
       });
 
     // Bereits vorhandene Anki-guids: erneut importierte Notizen werden übersprungen,
