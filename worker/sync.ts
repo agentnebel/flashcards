@@ -152,19 +152,37 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
           : undefined,
     };
   });
+  const referencedMedia = new Set<string>();
+  for (const { mutation, payload } of normalizedMutations) {
+    if (payload && (mutation.entity === 'note' || mutation.entity === 'noteType')) {
+      for (const match of JSON.stringify(payload).matchAll(/flashmedia:([a-f0-9]{64})/g)) {
+        referencedMedia.add(match[1]);
+      }
+    }
+  }
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
-      `INSERT INTO sync_user_daily_usage (user_id, day, mutations) VALUES (?,?,?)
+      // Dieser erste Write öffnet den gesamten Batch nur ohne laufende Medienlöschung.
+      // D1 serialisiert ihn atomar mit dem GC-Claim. Alle Folge-Statements übernehmen
+      // changes() > 0; ein gesperrter Batch verändert deshalb weder Daten noch Budgets.
+      `INSERT INTO sync_user_daily_usage (user_id, day, mutations)
+       SELECT ?,?,? WHERE NOT EXISTS (
+         SELECT 1 FROM json_each(?) AS refs
+         JOIN media ON media.user_id = ? AND media.sha256 = refs.value
+         WHERE media.orphaned_at < 0
+       )
        ON CONFLICT(user_id) DO UPDATE SET
          day = excluded.day,
          mutations = CASE
            WHEN sync_user_daily_usage.day = excluded.day
            THEN sync_user_daily_usage.mutations + excluded.mutations
            ELSE excluded.mutations
-         END`,
-    ).bind(req.userId, day, mutations.length),
+         END
+       RETURNING user_id`,
+    ).bind(req.userId, day, mutations.length, JSON.stringify([...referencedMedia]), req.userId),
     env.DB.prepare(
-      `INSERT INTO sync_global_daily_usage (id, day, mutations) VALUES (1,?,?)
+      `INSERT INTO sync_global_daily_usage (id, day, mutations)
+       SELECT 1,?,? WHERE changes() > 0
        ON CONFLICT(id) DO UPDATE SET
          day = excluded.day,
          mutations = CASE
@@ -181,11 +199,11 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
         // wieder; sqlite_sequence und last_insert_rowid() bleiben monoton erhalten.
         env.DB.prepare(
           `INSERT INTO change_log (user_id, entity, entity_id, op, changed_at)
-           VALUES (?,?,?,?,?) RETURNING seq`,
+           SELECT ?,?,?,?,? WHERE changes() > 0 RETURNING seq`,
         ).bind(req.userId, mutation.entity, mutation.entityId, mutation.op, now),
         env.DB.prepare(
           `INSERT INTO sync_objects (user_id, entity, entity_id, payload, deleted, seq, updated_at)
-           VALUES (?,?,?,?,?,last_insert_rowid(),?)
+           SELECT ?,?,?,?,?,last_insert_rowid(),? WHERE changes() > 0
            ON CONFLICT(user_id, entity, entity_id) DO UPDATE SET
              payload    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.payload ELSE sync_objects.payload END,
              deleted    = CASE WHEN excluded.updated_at >= sync_objects.updated_at THEN excluded.deleted ELSE sync_objects.deleted END,
@@ -237,6 +255,12 @@ export async function handlePush(req: AuthedRequest, env: Env): Promise<Response
       return error(429, 'Tägliches Sync-Limit erreicht. Bitte morgen erneut versuchen.');
     }
     throw batchError;
+  }
+  if (!results[0]?.results?.length) {
+    return json({
+      error: 'Eine referenzierte Mediendatei wird gerade bereinigt. Bitte kurz erneut versuchen.',
+      code: 'MEDIA_DELETE_IN_PROGRESS',
+    }, { status: 409, headers: { 'Retry-After': '2' } });
   }
   let cursor = 0;
   for (let index = 0; index < mutations.length; index++) {

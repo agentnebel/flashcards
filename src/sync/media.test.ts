@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, type Media, type Note } from '../db/db';
 import {
+  downloadReferencedMedia,
   garbageCollectRemoteMedia,
   revalidateReferencedMedia,
   uploadPendingMedia,
@@ -267,5 +268,47 @@ describe('Paginierte Remote-Medienbereinigung', () => {
       available: true,
       complete: true,
     });
+  });
+});
+
+
+describe('Medien aus Kartenvorlagen', () => {
+  async function addTemplate(hash: string): Promise<void> {
+    await db.noteTypes.add({
+      id: 'template-only', name: 'Vorlage', kind: 'standard', fields: ['Front'],
+      templates: [{ name: 'Karte', qfmt: `<img src="flashmedia:${hash}">{{Front}}`, afmt: '{{FrontSide}}' }],
+      css: '', updatedAt: 1,
+    });
+  }
+
+  it('revalidiert ein ausschließlich in der Vorlage referenziertes Bild', async () => {
+    const hash = 'e'.repeat(64);
+    await addTemplate(hash);
+    await db.media.add(makeMedia(hash, 1));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      have: [], missing: [hash],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(revalidateReferencedMedia('', 'token')).resolves.toEqual({ reset: 1, complete: true });
+    await expect(db.media.get(hash)).resolves.toMatchObject({ synced: 0 });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ hashes: [hash] });
+  });
+
+  it('lädt Vorlagenbilder auf einem anderen Gerät auch ohne Bildreferenz in Notizfeldern', async () => {
+    const bytes = 'template image bytes';
+    const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
+    const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(bytes));
+    const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    await addTemplate(hash);
+    vi.stubGlobal('crypto', webcrypto);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(bytes, {
+      headers: { 'Content-Type': 'image/webp' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(downloadReferencedMedia('', 'token')).resolves.toEqual({ downloaded: 1, pending: 0 });
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/media/${hash}`);
+    await expect(db.media.get(hash)).resolves.toMatchObject({ hash, synced: 1 });
   });
 });

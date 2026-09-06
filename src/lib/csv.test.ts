@@ -14,6 +14,21 @@ describe('detectDelimiter', () => {
     const csv = 'Front,Back\nalpha;beta;gamma,Antwort\ndelta;epsilon;zeta,Antwort';
     expect(detectDelimiter(csv)).toBe(',');
   });
+  it.each([',', '\t', ';'])('erhält alle Felder großer Dateien mit %j als Trenner', (delimiter) => {
+    const source = `Front${delimiter}Back\n` + `Frage${delimiter}Antwort\n`.repeat(500);
+    const parsed = parseCsv(source);
+    expect(parsed.delimiter).toBe(delimiter);
+    expect(parsed.rows).toHaveLength(501);
+    expect(parsed.rows.slice(1).every((row) =>
+      row.length === 2 && row[0] === 'Frage' && row[1] === 'Antwort')).toBe(true);
+  });
+  it('wertet Zeilenumbrüche in einem angeschnittenen quotierten Feld nicht als Record-Ende', () => {
+    const source = 'Front\tBack\n' + `"${'Text;mit;Semikolon\n'.repeat(400)}"\tAntwort\n`;
+    expect(detectDelimiter(source)).toBe('\t');
+  });
+  it('wählt bei einer verkürzten Datenzeile keinen unbenutzten Trenner', () => {
+    expect(detectDelimiter('Front,Back\nFrage,Antwort\nNur Frage\n')).toBe(',');
+  });
 });
 
 describe('parseDelimited', () => {

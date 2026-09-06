@@ -9,6 +9,7 @@ import {
   getDesiredRetention,
   getStudyQueue,
   scheduleCard,
+  ReviewConflictError,
 } from '../db/api';
 import { scopeImportedCardCss } from '../lib/cardCss';
 import { renderCard } from '../lib/cardgen';
@@ -309,19 +310,26 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
           // sie dauerhaft in answeredIds, würde sie erst beim nächsten Deck-Öffnen wiederkommen.
           answeredIds.current.delete(current.id);
         })
-        .catch((err) => {
+        .catch(async (err) => {
           console.error('Bewertung konnte nicht gespeichert werden:', err);
           answeredIds.current.delete(current.id);
           setDrag(0);
           setLeaving(null);
           setError((err as Error).message || 'Bewertung konnte nicht gespeichert werden.');
+          if (err instanceof ReviewConflictError) {
+            try {
+              await reload();
+            } catch {
+              setError('Der aktuelle Lernstand konnte nicht geladen werden. Bitte die Lernsitzung erneut öffnen.');
+            }
+          }
         })
         .finally(() => {
           setCommitting(false);
           releaseAnswerLock();
         });
     },
-    [current, schedule, cram, retention, releaseAnswerLock],
+    [current, schedule, cram, retention, releaseAnswerLock, reload],
   );
 
   // Wenn die Schlange leer wird: einmal neu fällige Lernkarten nachladen.
@@ -464,6 +472,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
   if (!current) {
     return (
       <div className="empty stack">
+        {error && <p className="feedback err" role="alert">{error}</p>}
         {cram ? (
           <>
             <p>✅ Alle Karten durchgegangen!</p>
@@ -507,6 +516,7 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
         {cram && <span className="cram-tag" title="Ändert deinen Lernplan nicht">Wiederholung</span>}
         <ProgressRing pct={pct} label={`${done}/${total}`} />
       </div>
+      {error && <p className="feedback err" role="alert">{error}</p>}
 
       <div className="review-stage">
         {swipeHint && <div className={`swipe-hint ${swipeHint}`}>{swipeHint === 'good' ? 'Gut' : 'Nochmal'}</div>}
@@ -537,7 +547,6 @@ export default function Review({ mode = 'study' }: { mode?: 'study' | 'cram' }) 
           <button className="primary block" disabled={!rendered} onClick={reveal}>
             Antwort zeigen
           </button>
-          {error && <p className="feedback err">{error}</p>}
           <p className="reveal-hint">Leertaste · Tippen</p>
         </div>
       ) : cram ? (

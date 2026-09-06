@@ -5,10 +5,9 @@
 
 import { db, type Media } from '../db/db';
 import { sha256Hex } from '../lib/media';
+import { referencedMediaHashes } from '../lib/mediaReferences';
 import { LocalDataResetError, withLocalDataOperation } from '../db/localDataLock';
 
-const FLASHMEDIA_RE = /flashmedia:([a-f0-9]+)/g;
-const MEDIA_HASH_RE = /^[a-f0-9]{64}$/;
 const EXISTS_CHUNK = 40;
 const MAX_REVALIDATION_CHUNKS_PER_SYNC = 20;
 const MAX_PENDING_EXISTS_CHUNKS_PER_SYNC = 40;
@@ -42,17 +41,9 @@ export async function revalidateReferencedMedia(
   signal?: AbortSignal,
 ): Promise<{ reset: number; complete: boolean }> {
   throwIfAborted(signal);
-  const notes = await db.notes.toArray();
+  const [notes, noteTypes] = await Promise.all([db.notes.toArray(), db.noteTypes.toArray()]);
   throwIfAborted(signal);
-
-  const referenced = new Set<string>();
-  for (const note of notes) {
-    for (const html of Object.values(note.fields ?? {})) {
-      for (const match of String(html).matchAll(FLASHMEDIA_RE)) {
-        if (MEDIA_HASH_RE.test(match[1])) referenced.add(match[1]);
-      }
-    }
-  }
+  const referenced = referencedMediaHashes(notes, noteTypes);
   if (referenced.size === 0) {
     await withLocalDataOperation(() => db.meta.delete(MEDIA_REVALIDATION_CURSOR_KEY));
     return { reset: 0, complete: true };
@@ -296,15 +287,8 @@ export async function downloadReferencedMedia(
   signal?: AbortSignal,
 ): Promise<{ downloaded: number; pending: number }> {
   throwIfAborted(signal);
-  const notes = await db.notes.toArray();
-  const referenced = new Set<string>();
-  for (const note of notes) {
-    for (const html of Object.values(note.fields ?? {})) {
-      for (const match of String(html).matchAll(FLASHMEDIA_RE)) {
-        if (MEDIA_HASH_RE.test(match[1])) referenced.add(match[1]);
-      }
-    }
-  }
+  const [notes, noteTypes] = await Promise.all([db.notes.toArray(), db.noteTypes.toArray()]);
+  const referenced = referencedMediaHashes(notes, noteTypes);
   const hashes = [...referenced].sort();
   const local = await db.media.bulkGet(hashes);
   const missing = hashes.filter((_, index) => !local[index]);

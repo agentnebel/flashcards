@@ -699,3 +699,150 @@ describe('Medienfehler isolieren', () => {
     await expect(db.media.get('a'.repeat(64))).resolves.toMatchObject({ synced: 0 });
   });
 });
+
+describe('Quota-Fortsetzung über die Batchgrenze', () => {
+  async function setupQueue(newNotes: number, releaseSpace: boolean): Promise<void> {
+    await db.meta.put({
+      key: 'auth',
+      value: { token: 'token', userId: 'user', email: 'user@example.test' },
+    });
+    await db.outbox.bulkAdd(Array.from({ length: newNotes }, (_, index) => ({
+      op: 'upsert' as const,
+      entity: 'note' as const,
+      entityId: `new-${index}`,
+      payload: { id: `new-${index}`, updatedAt: 1, fields: { Front: 'Frage' } },
+      createdAt: 1,
+    })));
+    if (releaseSpace) {
+      await db.outbox.add({
+        op: 'delete', entity: 'note', entityId: 'old-large-note', payload: null, createdAt: 2,
+      });
+    }
+  }
+
+  function quotaServer() {
+    let freed = false;
+    const requests: string[][] = [];
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      const path = String(input);
+      if (path === '/api/sync/pull') return Promise.resolve(emptyPullResponse());
+      if (path === '/api/media/gc') return Promise.resolve(new Response('{"complete":true}'));
+      if (path !== '/api/sync/push') throw new Error(`Unerwarteter Request: ${path}`);
+      const { mutations } = JSON.parse(String(init?.body)) as {
+        mutations: Array<{ entityId: string }>;
+      };
+      const ids = mutations.map((mutation) => mutation.entityId);
+      requests.push(ids);
+      if (!freed && ids.some((id) => id.startsWith('new-'))) {
+        return Promise.resolve(new Response(JSON.stringify({
+          code: 'SYNC_STORAGE_LIMIT', error: 'Sync-Speicherlimit erreicht',
+        }), { status: 413 }));
+      }
+      if (ids.includes('old-large-note')) freed = true;
+      return Promise.resolve(new Response('{"applied":1}'));
+    }));
+    return requests;
+  }
+
+  it('erreicht eine Löschung hinter 100 blockierten Einträgen und wiederholt danach die Upserts', async () => {
+    await setupQueue(100, true);
+    const requests = quotaServer();
+
+    await sync();
+
+    const deletion = requests.findIndex((ids) => ids.includes('old-large-note'));
+    expect(deletion).toBeGreaterThan(0);
+    expect(requests.slice(deletion + 1).flat()).toContain('new-0');
+    await expect(db.outbox.count()).resolves.toBe(0);
+    await expect(db.meta.get('deferredOutboxCursor')).resolves.toBeUndefined();
+    expect(getSyncState().error).toBeNull();
+  });
+
+  it('setzt einen größeren Rückstau nach dem Request-Budget fort statt wieder am Anfang zu scheitern', async () => {
+    await setupQueue(250, true);
+    const requests = quotaServer();
+
+    await sync();
+    expect(requests.length).toBeLessThanOrEqual(240);
+    expect((await db.meta.get('deferredOutboxCursor'))?.value).toBeGreaterThan(0);
+    await expect(db.outbox.count()).resolves.toBe(251);
+
+    for (let run = 0; run < 4 && await db.outbox.count() > 0; run++) {
+      const previousRequests = requests.length;
+      await sync();
+      expect(requests.length - previousRequests).toBeLessThanOrEqual(240);
+    }
+
+    expect(requests.flat()).toContain('old-large-note');
+    await expect(db.outbox.count()).resolves.toBe(0);
+    expect(getSyncState().error).toBeNull();
+  });
+
+  it('beendet eine unverändert volle Quota ohne Endlosschleife und behält alle Änderungen sendbar', async () => {
+    await setupQueue(100, false);
+    const requests = quotaServer();
+
+    await sync();
+
+    expect(requests.length).toBeLessThanOrEqual(240);
+    expect(await db.outbox.toArray()).toHaveLength(100);
+    expect((await db.outbox.toArray()).every((item) => !item.syncError)).toBe(true);
+    expect(getSyncState().error).toContain('Speicherlimit');
+  });
+
+  it('spielt einen älteren zurückgestellten Snapshot nach einer erfolgreichen Verkleinerung nicht erneut ein', async () => {
+    await db.meta.put({ key: 'auth', value: { token: 'token', userId: 'user', email: 'user@example.test' } });
+    await db.outbox.bulkAdd(['large', 'small'].map((value) => ({
+      op: 'upsert' as const, entity: 'note' as const, entityId: 'same-note',
+      payload: { id: 'same-note', updatedAt: 1, fields: { Front: value } }, createdAt: 1,
+    })));
+    let freed = false;
+    let serverValue = 'original';
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      if (String(input) === '/api/sync/pull') return Promise.resolve(emptyPullResponse());
+      if (String(input) === '/api/media/gc') return Promise.resolve(new Response('{"complete":true}'));
+      const { mutations } = JSON.parse(String(init?.body)) as {
+        mutations: Array<{ payload: { fields: { Front: string } } }>;
+      };
+      if (!freed && mutations.some((mutation) => mutation.payload.fields.Front === 'large')) {
+        return Promise.resolve(new Response('{"code":"SYNC_STORAGE_LIMIT"}', { status: 413 }));
+      }
+      for (const mutation of mutations) serverValue = mutation.payload.fields.Front;
+      freed = true;
+      return Promise.resolve(new Response('{}'));
+    }));
+
+    await sync();
+
+    expect(serverValue).toBe('small');
+    await expect(db.outbox.count()).resolves.toBe(0);
+  });
+
+  it('behält einen durch Medien-GC vorübergehend gesperrten Push für den nächsten Sync', async () => {
+    await setupQueue(1, false);
+    let locked = true;
+    let gcCalls = 0;
+    await db.meta.put({ key: 'lastMediaGcAt', value: Date.now() });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation((input) => {
+      if (String(input) === '/api/sync/pull') return Promise.resolve(emptyPullResponse());
+      if (String(input) === '/api/media/gc') {
+        gcCalls += 1;
+        return Promise.resolve(new Response('{"complete":true}'));
+      }
+      return Promise.resolve(locked
+        ? new Response('{"code":"MEDIA_DELETE_IN_PROGRESS","error":"Medien werden gerade bereinigt"}', { status: 409 })
+        : new Response('{}'));
+    }));
+
+    await sync();
+    const [pending] = await db.outbox.toArray();
+    expect(pending.syncError).toBeUndefined();
+    expect(getSyncState().error).toContain('bereinigt');
+    expect(gcCalls).toBe(1);
+
+    locked = false;
+    await sync();
+    await expect(db.outbox.count()).resolves.toBe(0);
+    expect(getSyncState().error).toBeNull();
+  });
+});

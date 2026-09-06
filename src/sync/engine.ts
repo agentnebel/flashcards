@@ -51,11 +51,14 @@ interface PullChange {
 
 class AuthError extends Error {}
 class SyncCancelled extends Error {}
-class DeferredQuotaError extends Error {}
+class PushBudgetReached extends Error {}
+class MediaGcDeferred extends Error {}
 
 // API ist same-origin (der Worker serviert auch das Frontend); im Dev proxyt Vite /api.
 const BASE = '';
 const MEDIA_REVALIDATION_INTERVAL_MS = 24 * 60 * 60_000;
+const MAX_PUSH_REQUESTS_PER_SYNC = 240;
+const DEFERRED_OUTBOX_CURSOR_KEY = 'deferredOutboxCursor';
 const syncEncoder = new TextEncoder();
 const SYNC_BODY_FIXED_BYTES =
   syncEncoder.encode('{"mutations":[').byteLength + syncEncoder.encode(']}').byteLength;
@@ -217,6 +220,7 @@ async function wipeLocalData(): Promise<void> {
       await db.meta.delete('lastMediaRevalidationAt');
       await db.meta.delete('mediaRevalidationCursor');
       await db.meta.delete('mediaDownloadCursor');
+      await db.meta.delete(DEFERRED_OUTBOX_CURSOR_KEY);
     },
   );
   // Ohne dies bliebe die App bis zum nächsten harten Reload ohne Standard-Deck/-Notiztypen
@@ -403,7 +407,18 @@ async function markOutboxRejected(item: import('../db/db').OutboxItem, reason: s
     db.outbox.put({ ...item, syncError: reason }).then(() => undefined));
 }
 
-async function removePushedOutbox(items: import('../db/db').OutboxItem[]): Promise<void> {
+interface PushContext {
+  requests: number;
+  pushed: number;
+  deferred: Map<number, string>;
+  // Frühere Läufe haben diese IDs bereits geprüft und wegen Quota zurückgestellt.
+  initialCursor: number;
+}
+
+async function removePushedOutbox(
+  items: import('../db/db').OutboxItem[],
+  context: PushContext,
+): Promise<void> {
   const sentIds = new Set(items.flatMap((item) => item.id === undefined ? [] : [item.id]));
   const newestSentByEntity = new Map<string, number>();
   for (const item of items) {
@@ -418,9 +433,14 @@ async function removePushedOutbox(items: import('../db/db').OutboxItem[]): Promi
         if (item.id === undefined) return [];
         if (sentIds.has(item.id)) return [item.id];
         const supersededBy = newestSentByEntity.get(`${item.entity}\u0000${item.entityId}`);
-        return item.syncError && supersededBy !== undefined && item.id < supersededBy ? [item.id] : [];
+        const deferred = context.deferred.has(item.id) || item.id <= context.initialCursor;
+        // Eine später akzeptierte Vollversion ersetzt ältere zurückgestellte Snapshots.
+        // Sonst könnte der Retry bei gleichem updatedAt die neuere Version zurückdrehen.
+        return (item.syncError || deferred) && supersededBy !== undefined && item.id < supersededBy
+          ? [item.id] : [];
       });
       if (deleteIds.length > 0) await db.outbox.bulkDelete(deleteIds);
+      for (const id of deleteIds) context.deferred.delete(id);
     }));
 }
 
@@ -430,70 +450,56 @@ async function pushBatchWithIsolation(
   signal: AbortSignal,
   items: import('../db/db').OutboxItem[],
   mutations: SyncMutation[],
+  context: PushContext,
 ): Promise<number> {
+  if (context.requests >= MAX_PUSH_REQUESTS_PER_SYNC) throw new PushBudgetReached();
+  context.requests += 1;
   const res = await apiPost('/api/sync/push', { mutations }, token, signal);
   assertSyncActive(epoch, signal);
   if (res.status === 401) throw new AuthError();
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new MediaGcDeferred(typeof body.error === 'string'
+      ? body.error : 'Medien werden gerade bereinigt. Der nächste Sync versucht es erneut.');
+  }
   if (res.status === 413) {
     const body = (await res.json().catch(() => ({}))) as {
       error?: unknown;
       code?: unknown;
     };
-    // Speicher- UND Objektlimit sind transiente Kontozustände: Löschungen können wieder
-    // Platz schaffen. Solche Items dürfen nicht dauerhaft als rejected markiert werden,
-    // sonst blieben z. B. neue Reviews eines vollen Kontos für immer lokal.
+    // Quota-Fehler bleiben sendbar. Auch bei unverändertem Limit müssen spätere
+    // Löschungen/Verkleinerungen im selben oder einem späteren Batch erreichbar bleiben.
     const quotaDeferred =
       body.code === 'SYNC_STORAGE_LIMIT' || body.code === 'SYNC_OBJECT_LIMIT';
     if (items.length > 1) {
-      // Das harte Objektlimit oder ein unerwartet engerer Serververtrag darf nicht den
-      // ganzen Head-Block festhalten: rekursiv teilen, erfolgreiche Updates durchlassen.
       const middle = Math.ceil(items.length / 2);
-      let first = 0;
-      let firstDeferred = false;
-      try {
-        first = await pushBatchWithIsolation(
-          token,
-          epoch,
-          signal,
-          items.slice(0, middle),
-          mutations.slice(0, middle),
-        );
-      } catch (errorValue) {
-        if (!(errorValue instanceof DeferredQuotaError)) throw errorValue;
-        firstDeferred = true;
-      }
-      const second = await pushBatchWithIsolation(
-        token,
-        epoch,
-        signal,
-        items.slice(middle),
-        mutations.slice(middle),
+      const first = await pushBatchWithIsolation(
+        token, epoch, signal, items.slice(0, middle), mutations.slice(0, middle), context,
       );
-      if (firstDeferred) {
-        // Ein späteres Update/eine Löschung kann Speicher freigegeben haben. Den ersten
-        // Teil genau einmal erneut versuchen, bevor der Sync als transient blockiert gilt.
-        first = await pushBatchWithIsolation(
-          token,
-          epoch,
-          signal,
-          items.slice(0, middle),
-          mutations.slice(0, middle),
-        );
-      }
+      const second = await pushBatchWithIsolation(
+        token, epoch, signal, items.slice(middle), mutations.slice(middle), context,
+      );
       return first + second;
     }
     if (quotaDeferred) {
-      throw new DeferredQuotaError(
-        typeof body.error === 'string' ? body.error : 'Sync-Quota erreicht',
-      );
+      const id = items[0].id;
+      if (id !== undefined) {
+        context.deferred.set(id, typeof body.error === 'string' ? body.error : 'Sync-Quota erreicht');
+        // Den Fortschritt auch vor einem Rate-/Request-Limit sichern. Ein großer Import
+        // beginnt beim nächsten Sync dann hinter den bereits erfolglos geprüften Einträgen.
+        await withLocalDataOperation(() =>
+          db.meta.put({ key: DEFERRED_OUTBOX_CURSOR_KEY, value: id }).then(() => undefined));
+      }
+      return 0;
     }
     const reason = typeof body.error === 'string' ? body.error : 'Server lehnt diese Änderung als zu groß ab';
     await markOutboxRejected(items[0], reason);
     return 0;
   }
   if (!res.ok) throw new Error(`Push fehlgeschlagen (${res.status})`);
-  await removePushedOutbox(items);
+  await removePushedOutbox(items, context);
   assertSyncActive(epoch, signal);
+  context.pushed += mutations.length;
   return mutations.length;
 }
 
@@ -501,18 +507,46 @@ async function pushOutbox(
   token: string,
   epoch: number,
   signal: AbortSignal,
-): Promise<{ pushed: number; rejected: number }> {
+): Promise<{
+  pushed: number;
+  rejected: number;
+  deferredMessage: string | null;
+  forceMediaGc: boolean;
+}> {
+  const cursorMeta = await db.meta.get(DEFERRED_OUTBOX_CURSOR_KEY);
+  const initialCursor = typeof cursorMeta?.value === 'number' ? cursorMeta.value : 0;
+  const context: PushContext = { requests: 0, pushed: 0, deferred: new Map(), initialCursor };
+  let scanFrom = initialCursor;
+  let wrapped = initialCursor === 0;
+  let retried = false;
+  let budgetReached = false;
+  let mediaGcMessage: string | null = null;
   let pushed = 0;
   for (let guard = 0; guard < 10000; guard++) {
     assertSyncActive(epoch, signal);
     const items = await withLocalDataOperation(() =>
       db.outbox
-        .orderBy('id')
-        .filter((item) => !item.syncError)
+        .where('id').above(scanFrom)
+        .filter((item) => !item.syncError && !context.deferred.has(item.id!))
         .limit(MAX_SYNC_MUTATIONS)
         .toArray());
     assertSyncActive(epoch, signal);
-    if (items.length === 0) break;
+    if (items.length === 0) {
+      if (!wrapped) {
+        wrapped = true;
+        scanFrom = 0;
+        continue;
+      }
+      if (context.deferred.size > 0 && pushed > 0 && !retried) {
+        // Spätere erfolgreiche Änderungen können Speicher freigegeben haben. Genau
+        // ein weiterer Durchlauf verhindert eine Endlosschleife bei unveränderter Quota.
+        retried = true;
+        context.deferred.clear();
+        scanFrom = 0;
+        continue;
+      }
+      break;
+    }
 
     const mutations: SyncMutation[] = [];
     const batchedItems: import('../db/db').OutboxItem[] = [];
@@ -551,17 +585,28 @@ async function pushOutbox(
     }
     if (mutations.length === 0) continue;
 
-    pushed += await pushBatchWithIsolation(
-      token,
-      epoch,
-      signal,
-      batchedItems,
-      mutations,
-    );
+    try {
+      await pushBatchWithIsolation(
+        token, epoch, signal, batchedItems, mutations, context,
+      );
+    } catch (errorValue) {
+      if (errorValue instanceof MediaGcDeferred) mediaGcMessage = errorValue.message;
+      else if (errorValue instanceof PushBudgetReached) budgetReached = true;
+      else throw errorValue;
+      pushed = context.pushed;
+      break;
+    }
+    pushed = context.pushed;
+    scanFrom = batchedItems[batchedItems.length - 1].id ?? scanFrom;
   }
   const rejected = await withLocalDataOperation(() =>
     db.outbox.filter((item) => Boolean(item.syncError)).count());
-  return { pushed, rejected };
+  const deferredMessage = mediaGcMessage ?? context.deferred.values().next().value ??
+    (budgetReached ? 'Weitere Änderungen werden beim nächsten Sync fortgesetzt.' : null);
+  if (!deferredMessage) {
+    await withLocalDataOperation(() => db.meta.delete(DEFERRED_OUTBOX_CURSOR_KEY));
+  }
+  return { pushed, rejected, deferredMessage, forceMediaGc: mediaGcMessage !== null };
 }
 
 // Vollständiger Sync-Durchlauf (idempotent, überlappungsfrei).
@@ -620,7 +665,9 @@ async function runSync(epoch: number, signal: AbortSignal): Promise<void> {
     // genügt wegen der 30-tägigen Quarantäne und verhindert den bisherigen Vollscan pro Minute.
     const lastMediaGc = await db.meta.get('lastMediaGcAt');
     assertSyncActive(epoch, signal);
-    if (typeof lastMediaGc?.value !== 'number' || Date.now() - lastMediaGc.value >= 24 * 60 * 60_000) {
+    // Ein abgebrochener GC kann einen Lösch-Claim hinterlassen. Ein dadurch mit 409
+    // zurückgestellter Push muss den GC fortsetzen können, auch vor dem Tagesintervall.
+    if (pushResult.forceMediaGc || typeof lastMediaGc?.value !== 'number' || Date.now() - lastMediaGc.value >= 24 * 60 * 60_000) {
       const gc = await garbageCollectRemoteMedia(BASE, auth.token, signal);
       if (gc.available && gc.complete) {
         assertSyncActive(epoch, signal);
@@ -647,7 +694,7 @@ async function runSync(epoch: number, signal: AbortSignal): Promise<void> {
     setState({
       syncing: false,
       lastSyncAt: now,
-      error: rejectedSyncMessage(pushResult.rejected),
+      error: pushResult.deferredMessage ?? rejectedSyncMessage(pushResult.rejected),
     });
   } catch (e) {
     if (e instanceof SyncCancelled || signal.aborted || epoch !== syncEpoch) return;

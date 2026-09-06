@@ -7,7 +7,23 @@ function stripBom(s: string): string {
 }
 
 export function detectDelimiter(text: string): string {
-  const sample = stripBom(text).slice(0, 5000);
+  const source = stripBom(text);
+  let sample = source.slice(0, 5000);
+  if (sample.length < source.length) {
+    // Nur abgeschlossene Records bewerten. Ein abgeschnittenes letztes Feld würde
+    // sonst die Spalten-Konsistenz des tatsächlichen Trennzeichens verschlechtern.
+    let inQuotes = false;
+    let lastRecordEnd = 0;
+    for (let i = 0; i < sample.length; i++) {
+      if (sample[i] === '"') {
+        if (inQuotes && sample[i + 1] === '"') i++;
+        else inQuotes = !inQuotes;
+      } else if (!inQuotes && (sample[i] === '\n' || sample[i] === '\r')) {
+        lastRecordEnd = i + 1;
+      }
+    }
+    if (lastRecordEnd > 0) sample = sample.slice(0, lastRecordEnd);
+  }
   const candidates = [',', '\t', ';'];
   let best = ',';
   let bestScore = -Infinity;
@@ -15,6 +31,9 @@ export function detectDelimiter(text: string): string {
     const rows = parseDelimited(sample, delimiter);
     if (rows.length === 0) continue;
     const widths = rows.map((row) => row.length);
+    // Ein gar nicht vorhandener Trenner liefert perfekt konsistente Einspalten-
+    // Zeilen, ist aber kein Kandidat für eine Datei mit mehreren Feldern.
+    if (!widths.some((width) => width > 1)) continue;
     const counts = new Map<number, number>();
     for (const width of widths) counts.set(width, (counts.get(width) ?? 0) + 1);
     const [modeWidth, modeCount] = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];

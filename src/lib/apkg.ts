@@ -17,6 +17,7 @@ import { uuid } from '../db/ids';
 import { withLocalDataOperation } from '../db/localDataLock';
 import { compressImage } from './media';
 import { unzipSafely } from './zipSafety';
+import { referencedMediaHashes } from './mediaReferences';
 
 const FIELD_SEP = '';
 const MAX_APKG_BYTES = 100 * 1024 * 1024;
@@ -28,7 +29,6 @@ const MAX_APKG_ENTRIES = 10_000;
 // Genau eine der Gruppen 2–4 matcht; das Rewrite normalisiert auf doppelte Anführungszeichen.
 const IMG_RE = /(<img\b[^>]*?\bsrc\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi;
 const imgSrcOf = (match: RegExpMatchArray): string => match[2] ?? match[3] ?? match[4] ?? '';
-const FLASHMEDIA_RE = /flashmedia:([a-f0-9]{64})/g;
 export const MAX_SYNC_MEDIA_BYTES = 15 * 1024 * 1024;
 
 export interface ApkgResult {
@@ -431,6 +431,16 @@ async function importApkgUnlocked(file: File, deckId: string): Promise<ApkgResul
         }
       }
     }
+    for (const nt of Object.values(modelNt)) {
+      for (const template of nt.templates) {
+        for (const source of [template.qfmt, template.afmt]) {
+          for (const match of source.matchAll(IMG_RE)) {
+            const src = imgSrcOf(match);
+            if (src) allNames.add(safeDecode(src));
+          }
+        }
+      }
+    }
     // Begrenzte Parallelität statt strikt sequenziell: Hashing/Dekodieren vieler kleiner
     // Bilder überlappt sich, ohne dass die Canvas-Normalisierung großer Bilder das Gerät
     // überlastet. Jeder Dateiname wird genau einmal aus der Queue gezogen; ensureMedia
@@ -489,6 +499,13 @@ async function importApkgUnlocked(file: File, deckId: string): Promise<ApkgResul
         const h = nameToHash[safeDecode(src)];
         return h ? `${pre}"flashmedia:${h}"` : full;
       });
+    for (const nt of Object.values(modelNt)) {
+      nt.templates = nt.templates.map((template) => ({
+        ...template,
+        qfmt: rewrite(template.qfmt),
+        afmt: rewrite(template.afmt),
+      }));
+    }
 
     // Bereits vorhandene Anki-guids: erneut importierte Notizen werden übersprungen,
     // statt jede Karte (und Medien) bei jedem Re-Import zu duplizieren.
@@ -585,17 +602,10 @@ async function importApkgUnlocked(file: File, deckId: string): Promise<ApkgResul
 
     // Medien aus übersprungenen GUIDs oder leeren/templatelosen Notizen gehören
     // nicht zum erfolgreichen Import. Nur Hashes committen, die tatsächlich in
-    // einer der vorbereiteten neuen Notizen referenziert werden.
-    const referencedMediaHashes = new Set<string>();
-    for (const note of stagedNotes) {
-      for (const field of Object.values(note.fields)) {
-        for (const match of field.matchAll(FLASHMEDIA_RE)) {
-          referencedMediaHashes.add(match[1]);
-        }
-      }
-    }
+    // einer neuen Notiz oder ihrem tatsächlich importierten Notiztyp referenziert werden.
+    const referencedHashes = referencedMediaHashes(stagedNotes, stagedNoteTypes);
     const mediaRows = [...stagedMedia.values()]
-      .filter((media) => referencedMediaHashes.has(media.hash));
+      .filter((media) => referencedHashes.has(media.hash));
 
     await db.transaction(
       'rw',

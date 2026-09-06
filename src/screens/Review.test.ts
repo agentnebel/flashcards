@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   scheduleCard: vi.fn(),
   getNote: vi.fn(),
   getNoteType: vi.fn(),
+  ReviewConflictError: class ReviewConflictError extends Error {},
 }));
 
 vi.mock('../db/api', () => ({
@@ -23,6 +24,7 @@ vi.mock('../db/api', () => ({
   getDesiredRetention: mocks.getDesiredRetention,
   getStudyQueue: mocks.getStudyQueue,
   scheduleCard: mocks.scheduleCard,
+  ReviewConflictError: mocks.ReviewConflictError,
 }));
 
 vi.mock('../db/db', () => ({
@@ -145,7 +147,9 @@ beforeEach(() => {
     value: vi.fn(),
   });
 
-  for (const mock of Object.values(mocks)) mock.mockReset();
+  for (const mock of Object.values(mocks)) {
+    if (vi.isMockFunction(mock)) mock.mockReset();
+  }
   mocks.commitReview.mockResolvedValue(undefined);
   mocks.getDesiredRetention.mockResolvedValue(0.9);
   mocks.getNote.mockResolvedValue(note);
@@ -226,6 +230,50 @@ describe('Review-Queue', () => {
 });
 
 describe('Review-Bewertung', () => {
+  it('lädt eine inzwischen geänderte Karte nach und erlaubt die erneute Bewertung', async () => {
+    const stale = makeCard('card-1');
+    const current = { ...stale, updatedAt: stale.updatedAt + 1 };
+    mocks.getStudyQueue.mockResolvedValueOnce([stale]).mockResolvedValueOnce([current]).mockResolvedValue([]);
+    mocks.commitReview.mockRejectedValueOnce(new mocks.ReviewConflictError('Karte wurde inzwischen geändert.'));
+
+    const host = await renderReview('study');
+    await act(async () => buttonWithText(host, 'Antwort zeigen').click());
+    await act(async () => buttonWithText(host, 'Gut').click());
+    await flushAsyncWork();
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('inzwischen geändert');
+    expect(mocks.getStudyQueue).toHaveBeenCalledTimes(2);
+    await act(async () => buttonWithText(host, 'Antwort zeigen').click());
+    await act(async () => buttonWithText(host, 'Gut').click());
+    await flushAsyncWork();
+
+    expect(mocks.commitReview.mock.calls[1][0]).toBe(current);
+    expect(host.textContent).toContain('Alles erledigt');
+  });
+
+  it('entfernt inzwischen gelöschte Karten nach einem Speicherkonflikt', async () => {
+    mocks.getStudyQueue.mockResolvedValueOnce([makeCard('card-1')]).mockResolvedValue([]);
+    mocks.commitReview.mockRejectedValueOnce(new mocks.ReviewConflictError('Karte wurde inzwischen gelöscht.'));
+    const host = await renderReview('study');
+    await act(async () => buttonWithText(host, 'Antwort zeigen').click());
+    await act(async () => buttonWithText(host, 'Gut').click());
+    await flushAsyncWork();
+    expect(host.textContent).toContain('Alles erledigt');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('gelöscht');
+  });
+
+  it('zeigt Speicherfehler auch auf der aufgedeckten Seite an', async () => {
+    mocks.getStudyQueue.mockResolvedValue([makeCard('card-1')]);
+    mocks.commitReview.mockRejectedValueOnce(new Error('Speicher voll'));
+    const host = await renderReview('study');
+    await act(async () => buttonWithText(host, 'Antwort zeigen').click());
+    await act(async () => buttonWithText(host, 'Gut').click());
+    await flushAsyncWork();
+    expect(host.querySelector('.grade-bar')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('Speicher voll');
+    expect(mocks.getStudyQueue).toHaveBeenCalledTimes(1);
+  });
+
   it('berechnet den persistierten Plan zum tatsächlichen Bewertungszeitpunkt', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-29T23:59:00.000Z'));

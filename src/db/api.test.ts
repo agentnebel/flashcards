@@ -8,8 +8,14 @@ import {
   getReviewStreak,
   importBackup,
   importBackupFile,
+  addNote,
+  updateNote,
+  gcOrphanedMedia,
+  commitReview,
+  ReviewConflictError,
 } from './api';
-import { db, type Card, type Deck, type Note, type NoteType, type RevlogEntry } from './db';
+import { db, type Card, type Deck, type Media, type Note, type NoteType, type RevlogEntry } from './db';
+import type { RecordLogItem } from 'ts-fsrs';
 
 function makeDeck(id: string, parentId: string | null = null): Deck {
   return { id, name: id, parentId, newPerDay: 20, updatedAt: 1 };
@@ -63,6 +69,70 @@ function makeRevlog(id: string, cardId: string): RevlogEntry {
 beforeEach(async () => {
   await db.transaction('rw', db.tables, async () => {
     await Promise.all(db.tables.map((table) => table.clear()));
+  });
+});
+
+describe('Entwurfsbilder und Vorlagenbilder', () => {
+  const hash = 'a'.repeat(64);
+  const type: NoteType = {
+    id: 'basic', name: 'Einfach', kind: 'standard', fields: ['Front', 'Back'],
+    templates: [{ name: 'Karte', qfmt: '{{Front}}', afmt: '{{Back}}' }], css: '', updatedAt: 1,
+  };
+  const image: Media = {
+    hash, blob: new Blob(['draft-image']), mime: 'image/png', size: 11,
+    width: 1, height: 1, createdAt: 1, synced: 0,
+  };
+
+  it.each(['neu', 'bearbeiten'] as const)('speichert bereinigte Entwurfsbilder atomar mit der Notiz: %s', async (mode) => {
+    await db.decks.add(makeDeck('deck'));
+    await db.noteTypes.add(type);
+    if (mode === 'bearbeiten') await addNote({ deckId: 'deck', noteTypeId: type.id, fields: { Front: 'Vorher' } });
+    await db.media.add(image);
+    // Ein anderer Tab bereinigt den Blob, bevor der Entwurf gespeichert wird.
+    expect(await gcOrphanedMedia()).toBe(1);
+    const fields = { Front: `<img src="flashmedia:${hash}">`, Back: 'Antwort' };
+    if (mode === 'neu') {
+      await addNote({ deckId: 'deck', noteTypeId: type.id, fields, draftMedia: [image] });
+    } else {
+      const note = await db.notes.toCollection().first();
+      await updateNote(note!.id, fields, undefined, undefined, [image]);
+    }
+    expect((await db.notes.toCollection().first())?.fields).toEqual(fields);
+    expect(await db.media.get(hash)).toMatchObject({ hash, size: 11, synced: 0 });
+    expect(await gcOrphanedMedia()).toBe(0);
+  });
+
+  it('bewahrt vorhandenen Sync-Status und speichert keine aus dem Entwurf entfernten Bilder', async () => {
+    await db.decks.add(makeDeck('deck'));
+    await db.noteTypes.add(type);
+    await db.media.add({ ...image, synced: 1 });
+    const removedImage = { ...image, hash: 'b'.repeat(64) };
+    await addNote({
+      deckId: 'deck', noteTypeId: type.id, fields: { Front: `<img src="flashmedia:${hash}">` },
+      draftMedia: [image, removedImage],
+    });
+    expect((await db.media.get(hash))?.synced).toBe(1);
+    expect(await db.media.get(removedImage.hash)).toBeUndefined();
+  });
+
+  it('behält Bilder, die ausschließlich in einer Kartenvorlage referenziert werden', async () => {
+    await db.media.add(image);
+    await db.noteTypes.add({ ...type, templates: [{ name: 'Bild', qfmt: `<img src="flashmedia:${hash}">`, afmt: '' }] });
+    expect(await gcOrphanedMedia()).toBe(0);
+    expect(await db.media.get(hash)).toBeDefined();
+  });
+});
+
+describe('Versionskonflikte beim Lernen', () => {
+  it('signalisiert veraltete oder gelöschte Karten ohne Lernhistorie zu verändern', async () => {
+    const stale = makeCard('card', 'note', 'deck');
+    const item = { card: stale.fsrs, log: { review: new Date() } } as RecordLogItem;
+    await db.cards.add({ ...stale, updatedAt: stale.updatedAt + 1 });
+    await expect(commitReview(stale, item)).rejects.toBeInstanceOf(ReviewConflictError);
+    await db.cards.delete(stale.id);
+    await expect(commitReview(stale, item)).rejects.toBeInstanceOf(ReviewConflictError);
+    expect(await db.revlog.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
   });
 });
 

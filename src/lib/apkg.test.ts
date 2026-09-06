@@ -4,6 +4,7 @@ import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/db';
 import { importApkg, prepareApkgMedia } from './apkg';
+import { renderCard } from './cardgen';
 
 vi.mock('sql.js', async () => {
   return vi.importActual<typeof import('sql.js')>('sql.js/dist/sql-asm.js');
@@ -53,7 +54,7 @@ async function makeApkg({
   });
 }
 
-function basicModels(qfmt: unknown = '{{Front}}'): unknown {
+function basicModels(qfmt: unknown = '{{Front}}', afmt: unknown = '{{FrontSide}}<hr>{{Back}}'): unknown {
   return {
     1: {
       name: 'Minimal',
@@ -66,7 +67,7 @@ function basicModels(qfmt: unknown = '{{Front}}'): unknown {
       tmpls: [{
         name: 'Karte 1',
         qfmt,
-        afmt: '{{FrontSide}}<hr>{{Back}}',
+        afmt,
         ord: 0,
       }],
     },
@@ -281,6 +282,62 @@ describe('importApkg', () => {
     const [note] = await db.notes.toArray();
     const [media] = await db.media.toArray();
     expect(note.fields.Front).toBe(`<img src="flashmedia:${media.hash}" alt=x>Frage`);
+  });
+
+  it('importiert Bilder auf beiden Vorlagenseiten und stellt ihre Referenzen zum Rendern und Sync bereit', async () => {
+    await addTargetDeck();
+    const archive = await makeApkg({
+      models: basicModels(
+        '<img src=_diagram.png>{{Front}}',
+        '<img src="_answer%20diagram.png">{{Back}}',
+      ),
+      notes: [['template-guid', 1, 'Frage\u001fAntwort']],
+      media: { 0: new Uint8Array([1, 2, 3]), 1: new Uint8Array([4, 5, 6]) },
+      mediaManifest: { 0: '_diagram.png', 1: '_answer diagram.png' },
+    });
+
+    const result = await importApkg(archive, 'target-deck');
+
+    expect(result).toMatchObject({ notes: 1, cards: 1, media: 2, warnings: [] });
+    const [noteType] = await db.noteTypes.toArray();
+    const [note] = await db.notes.toArray();
+    const [card] = await db.cards.toArray();
+    const media = await db.media.toArray();
+    const rendered = renderCard(note, noteType, card);
+    const frontHash = /flashmedia:([a-f0-9]{64})/.exec(rendered.front)?.[1];
+    const backHash = /flashmedia:([a-f0-9]{64})/.exec(rendered.back)?.[1];
+    expect(new Set([frontHash, backHash])).toEqual(new Set(media.map((row) => row.hash)));
+    expect(rendered.front).not.toContain('_diagram.png');
+    expect(rendered.back).not.toContain('_answer');
+    expect(note.fields).toEqual({ Front: 'Frage', Back: 'Antwort' });
+    const typeMutation = await db.outbox.filter((item) => item.entity === 'noteType').first();
+    expect(typeMutation?.payload).toEqual(noteType);
+  });
+
+  it('committet keine Vorlagenbilder eines ausschließlich übersprungenen Notiztyps', async () => {
+    await addTargetDeck();
+    const archive = await makeApkg({
+      models: basicModels('<img src="_diagram.png">{{Front}}'),
+      notes: [['template-duplicate-guid', 1, 'Frage\u001fAntwort']],
+      media: { 0: new Uint8Array([1, 2, 3]) },
+      mediaManifest: { 0: '_diagram.png' },
+    });
+    await db.notes.add({
+      id: 'existing-note',
+      guid: 'template-duplicate-guid',
+      noteTypeId: 'existing-type',
+      deckId: 'target-deck',
+      fields: { Front: 'Vorhanden', Back: 'Antwort' },
+      tags: [],
+      sortField: 'Vorhanden',
+      updatedAt: 1,
+    });
+
+    const result = await importApkg(archive, 'target-deck');
+
+    expect(result).toMatchObject({ noteTypes: 0, notes: 0, cards: 0, media: 0 });
+    expect(await db.media.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
   });
 
   it('committet keine Medien, wenn alle referenzierenden Notizen übersprungen werden', async () => {

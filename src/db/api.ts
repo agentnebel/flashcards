@@ -6,6 +6,7 @@ import { generateCards } from '../lib/cardgen';
 import { freshCardsForNote, reconcileCardsForNote } from './cardReconcile';
 import { withLocalDataOperation } from './localDataLock';
 import { unzipSafely } from '../lib/zipSafety';
+import { referencedMediaHashes } from '../lib/mediaReferences';
 
 const NO_CARDS_MSG = 'Diese Notiz würde keine Karten erzeugen. Bitte fülle die für die Kartenvorlage benötigten Felder aus.';
 const MAX_LEGACY_BACKUP_JSON_BYTES = 100 * 1024 * 1024;
@@ -60,6 +61,7 @@ export async function addNote(params: {
   deckId: string;
   fields: Record<string, string>;
   tags?: string[];
+  draftMedia?: readonly Media[];
 }): Promise<void> {
   return withLocalDataOperation(() => addNoteUnlocked(params));
 }
@@ -69,6 +71,7 @@ async function addNoteUnlocked(params: {
   deckId: string;
   fields: Record<string, string>;
   tags?: string[];
+  draftMedia?: readonly Media[];
 }): Promise<void> {
   const [nt, deck] = await Promise.all([
     db.noteTypes.get(params.noteTypeId),
@@ -91,7 +94,8 @@ async function addNoteUnlocked(params: {
   };
   const cards = freshCardsForNote(note, nt, now);
   if (cards.length === 0) throw new Error(NO_CARDS_MSG);
-  await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+  await db.transaction('rw', db.notes, db.cards, db.media, db.outbox, async () => {
+    await restoreDraftMedia(params.fields, params.draftMedia);
     await db.notes.add(note);
     await db.cards.bulkAdd(cards);
     await db.outbox.add({ op: 'upsert', entity: 'note', entityId: id, payload: note, createdAt: now });
@@ -160,9 +164,10 @@ export async function updateNote(
   fields: Record<string, string>,
   newDeckId?: string,
   newNoteTypeId?: string,
+  draftMedia?: readonly Media[],
 ): Promise<void> {
   return withLocalDataOperation(() =>
-    updateNoteUnlocked(noteId, fields, newDeckId, newNoteTypeId));
+    updateNoteUnlocked(noteId, fields, newDeckId, newNoteTypeId, draftMedia));
 }
 
 async function updateNoteUnlocked(
@@ -170,6 +175,7 @@ async function updateNoteUnlocked(
   fields: Record<string, string>,
   newDeckId?: string,
   newNoteTypeId?: string,
+  draftMedia?: readonly Media[],
 ): Promise<void> {
   const note = await db.notes.get(noteId);
   // Laut werden statt still zurückkehren: Der Aufrufer (AddCard) würde ein silent return
@@ -195,7 +201,8 @@ async function updateNoteUnlocked(
     // Notiztyp gewechselt: alte Karten löschen + neue nach neuem Template generieren.
     // FSRS-Fortschritt der alten Karten geht verloren (analog zu Anki).
     const newCards = freshCardsForNote(updated, nt, now);
-    await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+    await db.transaction('rw', db.notes, db.cards, db.media, db.outbox, async () => {
+      await restoreDraftMedia(fields, draftMedia);
       const existingCards = await db.cards.where('noteId').equals(noteId).toArray();
       await db.notes.put(updated);
       await db.outbox.add({ op: 'upsert', entity: 'note', entityId: noteId, payload: updated, createdAt: now });
@@ -209,7 +216,8 @@ async function updateNoteUnlocked(
       }
     });
   } else {
-    await db.transaction('rw', db.notes, db.cards, db.outbox, async () => {
+    await db.transaction('rw', db.notes, db.cards, db.media, db.outbox, async () => {
+      await restoreDraftMedia(fields, draftMedia);
       const existingCards = await db.cards.where('noteId').equals(noteId).toArray();
       const cardChanges = reconcileCardsForNote(updated, nt, existingCards, now);
       await db.notes.put(updated);
@@ -431,6 +439,8 @@ export function scheduleCard(card: Card, retention: number, now: Date = new Date
   return makeScheduler(retention).repeat(card.fsrs, now);
 }
 
+export class ReviewConflictError extends Error {}
+
 // Persistiert ein zuvor mit scheduleCard berechnetes Ergebnis (write-behind aus dem Review).
 export async function commitReview(card: Card, item: RecordLogItem): Promise<void> {
   return withLocalDataOperation(() => commitReviewUnlocked(card, item));
@@ -455,9 +465,9 @@ async function commitReviewUnlocked(card: Card, item: RecordLogItem): Promise<vo
   };
   await db.transaction('rw', db.cards, db.revlog, db.outbox, async () => {
     const current = await db.cards.get(card.id);
-    if (!current) throw new Error('Karte wurde nicht gefunden.');
+    if (!current) throw new ReviewConflictError('Karte wurde inzwischen gelöscht.');
     if (current.updatedAt !== card.updatedAt) {
-      throw new Error('Karte wurde inzwischen geändert. Bitte erneut bewerten.');
+      throw new ReviewConflictError('Karte wurde inzwischen geändert. Der aktuelle Lernstand wird neu geladen.');
     }
     const updated: Card = { ...current, fsrs: next, due: next.due, updatedAt: reviewedAt };
     await db.cards.put(updated);
@@ -489,22 +499,29 @@ export async function setSuspended(cardId: string, suspended: 0 | 1): Promise<vo
 // Verwaiste Medien aufräumen: lokale Blobs löschen, die in keinem Notizfeld mehr referenziert
 // werden. Geteilte Bilder (in mehreren Notizen) bleiben erhalten. Wird nach Lösch-Operationen
 // aufgerufen, damit der IndexedDB-Speicher nicht unbegrenzt wächst.
-const FLASHMEDIA_REF_RE = /flashmedia:([a-f0-9]+)/g;
+// Ein anderer Tab darf ungespeicherte Bilder zwischen Einfügen und Speichern bereinigen.
+// Der Editor hält ihre Blobs im Entwurf; fehlende Bytes werden mit der Notiz atomar
+// zurückgeschrieben. Bereits vorhandene Medien behalten ihren aktuellen Sync-Status.
+async function restoreDraftMedia(fields: Record<string, string>, media: readonly Media[] = []): Promise<void> {
+  const referenced = referencedMediaHashes([{ fields }]);
+  for (const row of media) {
+    if (referenced.has(row.hash) && !(await db.media.get(row.hash))) {
+      await db.media.add({ ...row, synced: 0 });
+    }
+  }
+}
+
 export async function gcOrphanedMedia(): Promise<number> {
   return withLocalDataOperation(gcOrphanedMediaUnlocked);
 }
 
 async function gcOrphanedMediaUnlocked(): Promise<number> {
-  const [notes, hashes] = await Promise.all([
+  const [notes, noteTypes, hashes] = await Promise.all([
     db.notes.toArray(),
+    db.noteTypes.toArray(),
     db.media.orderBy('hash').keys() as Promise<string[]>,
   ]);
-  const referenced = new Set<string>();
-  for (const n of notes) {
-    for (const v of Object.values(n.fields ?? {})) {
-      for (const m of String(v).matchAll(FLASHMEDIA_REF_RE)) referenced.add(m[1]);
-    }
-  }
+  const referenced = referencedMediaHashes(notes, noteTypes);
   const orphans = hashes.filter((h) => !referenced.has(h));
   if (orphans.length) await db.media.bulkDelete(orphans);
   return orphans.length;

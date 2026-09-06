@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent } from 'react';
 import { useBeforeUnload, useBlocker, useNavigate, useParams } from 'react-router-dom';
-import { db } from '../db/db';
+import { db, type Media } from '../db/db';
 import { addNote, gcOrphanedMedia, updateNote } from '../db/api';
 import { withLocalDataOperation } from '../db/localDataLock';
 import { mediaUrl, resolveMediaHtml, storeImage } from '../lib/media';
@@ -57,6 +57,9 @@ export default function AddCard() {
   const caretRefs = useRef<Record<string, number>>({});
   const loadedNoteIdRef = useRef<string | null>(null);
   const pendingImagesRef = useRef(0);
+  // Blobs bis zum Speichern behalten: Die gemeinsame IndexedDB kann währenddessen
+  // durch die Medienbereinigung eines anderen Tabs verändert werden.
+  const draftMediaRef = useRef(new Map<string, Media>());
   const savingRef = useRef(false);
   const allowNavigationRef = useRef(false);
   const timersRef = useRef<number[]>([]);
@@ -176,7 +179,13 @@ export default function AddCard() {
       // Bilddekodierung/Kompression kann länger dauern. Der gemeinsame Import-Lock sorgt
       // dafür, dass ein Logout erst danach wischt und der Blob nicht hinter dem Wipe
       // wieder als fremdes, unreferenziertes Medium in IndexedDB auftaucht.
-      const hash = await withLocalDataOperation(() => storeImage(file));
+      const hash = await withLocalDataOperation(async () => {
+        const storedHash = await storeImage(file);
+        const media = await db.media.get(storedHash);
+        if (!media) throw new Error('Entwurfsbild konnte nicht geladen werden.');
+        draftMediaRef.current.set(storedHash, media);
+        return storedHash;
+      });
       insertTagAtCaret(field, `<img src="flashmedia:${hash}">`);
     } catch (err) {
       console.error('Bild konnte nicht gespeichert werden', err);
@@ -255,7 +264,7 @@ export default function AddCard() {
     setSaving(true);
     try {
       if (isEdit && noteId) {
-        await updateNote(noteId, fields, deckId, noteTypeId);
+        await updateNote(noteId, fields, deckId, noteTypeId, [...draftMediaRef.current.values()]);
         await gcOrphanedMedia();
         setDirty(false);
         // Direkt nach dem erfolgreichen Commit zurück. Ein verzögerter Timer ließ die
@@ -263,7 +272,8 @@ export default function AddCard() {
         allowNavigationRef.current = true;
         navigate('/app/browse');
       } else {
-        await addNote({ noteTypeId: nt.id, deckId, fields });
+        await addNote({ noteTypeId: nt.id, deckId, fields, draftMedia: [...draftMediaRef.current.values()] });
+        draftMediaRef.current.clear();
         setFields(Object.fromEntries(nt.fields.map((f) => [f, ''])));
         caretRefs.current = {};
         setDirty(false);

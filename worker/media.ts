@@ -50,6 +50,19 @@ interface MediaGcRun {
   snapshot_seq: number;
 }
 
+function decodeReferenceCursor(value: string): { entity: 'note' | 'noteType'; id: string } {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.length === 2 &&
+      (parsed[0] === 'note' || parsed[0] === 'noteType') && typeof parsed[1] === 'string') {
+      return { entity: parsed[0], id: parsed[1] };
+    }
+  } catch {
+    // Vorherige Worker speicherten nur die ID der zuletzt gescannten Notiz.
+  }
+  return { entity: 'note', id: value };
+}
+
 function decodeScanCursor(value: string): { noteId: string; hash: string } | null {
   if (!value) return null;
   try {
@@ -221,9 +234,9 @@ async function liveReferencedHashes(
        FROM sync_objects AS note
        CROSS JOIN json_each(?) AS requested
       WHERE note.user_id = ?
-        AND note.entity = 'note'
+        AND note.entity IN ('note', 'noteType')
         AND note.deleted = 0
-        AND note.seq > ?
+        AND (note.seq > ? OR note.entity = 'noteType')
         AND INSTR(note.payload, 'flashmedia:' || requested.value) > 0`,
   )
     .bind(JSON.stringify(hashes), userId, afterSeq)
@@ -621,15 +634,17 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
 
     scanPages:
     while (scanned < MAX_GC_NOTES_PER_RUN && scannedBytes < MAX_GC_NOTE_BYTES_PER_RUN) {
+      const position = decodeReferenceCursor(cursor);
       const page = await env.DB.prepare(
-        `SELECT entity_id, payload, deleted
+        `SELECT entity, entity_id, payload, deleted
            FROM sync_objects
-          WHERE user_id = ? AND entity = 'note' AND seq <= ? AND entity_id > ?
-          ORDER BY entity_id ASC
+          WHERE user_id = ? AND entity IN ('note', 'noteType') AND seq <= ?
+            AND (entity, entity_id) > (?, ?)
+          ORDER BY entity ASC, entity_id ASC
           LIMIT ?`,
       )
-        .bind(req.userId, claimed.snapshot_seq, cursor, GC_NOTE_PAGE_SIZE)
-        .all<{ entity_id: string; payload: string | null; deleted: number }>();
+        .bind(req.userId, claimed.snapshot_seq, position.entity, position.id, GC_NOTE_PAGE_SIZE)
+        .all<{ entity: string; entity_id: string; payload: string | null; deleted: number }>();
       if (page.results.length === 0) {
         complete = true;
         break;
@@ -643,7 +658,9 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
         }
         scannedBytes += rowBytes;
 
-        const resumeHash = resume?.noteId === row.entity_id ? resume.hash : '';
+        const rowCursor = JSON.stringify([row.entity, row.entity_id]);
+        const resumeHash = resume?.noteId === rowCursor ||
+          (row.entity === 'note' && resume?.noteId === row.entity_id) ? resume!.hash : '';
         const rowHashes = row.deleted === 0
           ? [...mediaHashesInPayload(row.payload)]
             .sort()
@@ -655,7 +672,7 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
             // Eine einzelne gültige Sync-Payload kann mehrere tausend Media-Hashes
             // enthalten. Den Notizinhalt deshalb innerhalb derselben Note fortsetzbar
             // paginieren, statt den GC dauerhaft am Tagesbudget festzufahren.
-            nextScanCursor = JSON.stringify([row.entity_id, processedHash]);
+            nextScanCursor = JSON.stringify([rowCursor, processedHash]);
             partialNote = true;
             break;
           }
@@ -666,7 +683,7 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
 
         scanned += 1;
         consumed += 1;
-        cursor = row.entity_id;
+        cursor = rowCursor;
         nextScanCursor = '';
         if (scanned >= MAX_GC_NOTES_PER_RUN) break;
       }
@@ -813,9 +830,9 @@ export async function handleMediaGc(req: AuthedRequest, env: Env): Promise<Respo
             AND NOT EXISTS (
               SELECT 1 FROM sync_objects AS note
                WHERE note.user_id = ?
-                 AND note.entity = 'note'
+                 AND note.entity IN ('note', 'noteType')
                  AND note.deleted = 0
-                 AND note.seq > ?
+                 AND (note.seq > ? OR note.entity = 'noteType')
                  AND INSTR(note.payload, 'flashmedia:' || ?) > 0
             )
           RETURNING sha256`,
@@ -896,9 +913,29 @@ export async function handleMediaExists(req: AuthedRequest, env: Env): Promise<R
   if (!(await reserveR2Budget(env, req.userId, 0, unique.length))) {
     return error(429, 'Tägliches Medien-Abruflimit erreicht. Bitte morgen erneut versuchen.');
   }
-  const heads = await Promise.all(unique.map((hash) => env.MEDIA!.head(`${req.userId}/${hash}`)));
-  const have = unique.filter((_, index) => heads[index] !== null);
-  const missing = unique.filter((_, index) => heads[index] === null);
+  // Eine bestätigte Wiederverwendung beendet zuerst atomar die Quarantäne. Gewinnt
+  // dagegen der negative GC-Claim, bleibt der Hash missing und der Upload versucht
+  // es nach der Löschung erneut; ein noch laufender R2-Delete darf kein have ergeben.
+  const availability = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE media SET orphaned_at = NULL
+        WHERE user_id = ? AND sha256 IN (SELECT value FROM json_each(?))
+          AND orphaned_at >= 0`,
+    ).bind(req.userId, JSON.stringify(unique)),
+    env.DB.prepare(
+      `SELECT sha256 FROM media
+        WHERE user_id = ? AND sha256 IN (SELECT value FROM json_each(?))
+          AND orphaned_at IS NULL`,
+    ).bind(req.userId, JSON.stringify(unique)),
+  ]);
+  const available = new Set(
+    (availability[1].results as Array<{ sha256: string }>).map((row) => row.sha256),
+  );
+  const checked = unique.filter((hash) => available.has(hash));
+  const heads = await Promise.all(checked.map((hash) => env.MEDIA!.head(`${req.userId}/${hash}`)));
+  const have = checked.filter((_, index) => heads[index] !== null);
+  const present = new Set(have);
+  const missing = unique.filter((hash) => !present.has(hash));
 
   return json({ have, missing });
 }
